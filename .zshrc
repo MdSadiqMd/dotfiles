@@ -1,0 +1,1 @@
+/Users/sadiq/.zshrc
