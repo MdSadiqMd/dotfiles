@@ -1,5 +1,5 @@
 {
-  description = "Example nix-darwin system flake with symlinked .zshrc";
+  description = "Example nix-darwin system flake with .zshrc in nix folder";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -70,18 +70,23 @@
                 username = "sadiq";
               };
               
-              # Use activation script to create symlink only if .zshrc doesn't exist
+              # Use activation script to create symlink from nix folder to home
               home.activation = {
                 linkZshrc = let 
-                  zshrcPath = "/Users/sadiq/.zshrc";
+                  zshrcSource = "/Users/sadiq/.config/nix/.zshrc";  # File in nix folder
+                  zshrcTarget = "/Users/sadiq/.zshrc";              # Symlink in home
                 in lib.hm.dag.entryAfter ["writeBoundary"] ''
-                  if [ ! -e "${zshrcPath}" ]; then
-                    echo "Creating initial .zshrc file..."
-                    touch "${zshrcPath}"
+                  # Create the source file in nix folder if it doesn't exist
+                  if [ ! -e "${zshrcSource}" ]; then
+                    echo "Creating initial .zshrc file in nix folder..."
+                    mkdir -p "$(dirname "${zshrcSource}")"
+                    echo "# Your zsh configuration" > "${zshrcSource}"
                   fi
-                  if [ ! -L "${zshrcPath}" ]; then
-                    echo "Creating symlink for .zshrc..."
-                    $DRY_RUN_CMD ln -sf "${zshrcPath}" "$HOME/.zshrc"
+                  
+                  # Create symlink from home to nix folder
+                  if [ ! -L "${zshrcTarget}" ] || [ "$(readlink "${zshrcTarget}")" != "${zshrcSource}" ]; then
+                    echo "Creating symlink from home to nix folder..."
+                    $DRY_RUN_CMD ln -sf "${zshrcSource}" "${zshrcTarget}"
                   fi
                 '';
               };
