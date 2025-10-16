@@ -31,6 +31,7 @@
         enable = true;
         casks = [
           "hammerspoon"
+          "ghostty"  # Add Ghostty via Homebrew instead
         ];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
