@@ -70,23 +70,12 @@
                 username = "sadiq";
               };
               
-              # Use activation script to create symlink from nix folder to home
+              # Simple approach: just create a symlink from home to nix folder
               home.activation = {
-                linkZshrc = let 
-                  zshrcSource = "/Users/sadiq/.config/nix/.zshrc";  # File in nix folder
-                  zshrcTarget = "/Users/sadiq/.zshrc";              # Symlink in home
-                in lib.hm.dag.entryAfter ["writeBoundary"] ''
-                  # Create the source file in nix folder if it doesn't exist
-                  if [ ! -e "${zshrcSource}" ]; then
-                    echo "Creating initial .zshrc file in nix folder..."
-                    mkdir -p "$(dirname "${zshrcSource}")"
-                    echo "# Your zsh configuration" > "${zshrcSource}"
-                  fi
-                  
-                  # Create symlink from home to nix folder
-                  if [ ! -L "${zshrcTarget}" ] || [ "$(readlink "${zshrcTarget}")" != "${zshrcSource}" ]; then
-                    echo "Creating symlink from home to nix folder..."
-                    $DRY_RUN_CMD ln -sf "${zshrcSource}" "${zshrcTarget}"
+                createZshrcSymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
+                  if [ ! -L "$HOME/.zshrc" ]; then
+                    echo "Creating symlink from ~/.zshrc to nix folder..."
+                    $DRY_RUN_CMD ln -sf "/Users/sadiq/.config/nix/.zshrc" "$HOME/.zshrc"
                   fi
                 '';
               };
