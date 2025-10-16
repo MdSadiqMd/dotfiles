@@ -27,11 +27,15 @@
         pkgs.git
       ];
 
+      environment.variables = {
+        HOMEBREW_NO_ANALYTICS = "1";
+      };
+
       homebrew = {
         enable = true;
         casks = [
           "hammerspoon"
-          "ghostty"  # Add Ghostty via Homebrew instead
+          "ghostty"
         ];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
