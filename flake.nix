@@ -36,6 +36,7 @@
         casks = [
           "hammerspoon"
           "ghostty"
+          "alt-tab"  # Added Alt-Tab window switcher
         ];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
@@ -74,7 +75,7 @@
                 stateVersion = "24.05";
                 username = "sadiq";
               };
-              
+
               # Simple approach: just create a symlink from home to nix folder
               home.activation = {
                 createZshrcSymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
@@ -84,7 +85,7 @@
                   fi
                 '';
               };
-              
+
               programs.zsh.enable = false;
             };
           };
