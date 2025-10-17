@@ -8,9 +8,10 @@
     mac-app-util.url = "github:hraban/mac-app-util";
     nix-homebrew.url = "github:zhaofengli-wip/nix-homebrew";
     home-manager.url = "github:nix-community/home-manager";
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
-  outputs = inputs@{ self, nix-darwin, nixpkgs, mac-app-util, nix-homebrew, home-manager }:
+  outputs = inputs@{ self, nix-darwin, nixpkgs, mac-app-util, nix-homebrew, home-manager, rust-overlay }:
   let
     configuration = { pkgs, ... }: {
       system.primaryUser = "sadiq";
@@ -21,10 +22,15 @@
         home = "/Users/sadiq";
       };
 
-      environment.systemPackages = [
-        pkgs.vim
-        pkgs.obsidian
-        pkgs.git
+      # Install specific versions of development tools
+      environment.systemPackages = with pkgs; [
+        vim
+        obsidian
+        git
+        go_1_24
+        rust-bin.stable."1.87.0".default
+        nodejs_20
+        nodePackages.typescript
       ];
 
       environment.variables = {
@@ -36,7 +42,7 @@
         casks = [
           "hammerspoon"
           "ghostty"
-          "alt-tab"  # Added Alt-Tab window switcher
+          "alt-tab"
         ];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
@@ -54,6 +60,11 @@
       system = "aarch64-darwin";
 
       modules = [
+        # Add rust-overlay
+        ({ pkgs, ... }: {
+          nixpkgs.overlays = [ rust-overlay.overlays.default ];
+        })
+        
         configuration
         mac-app-util.darwinModules.default
         nix-homebrew.darwinModules.nix-homebrew
@@ -76,7 +87,7 @@
                 username = "sadiq";
               };
 
-              # Simple approach: just create a symlink from home to nix folder
+
               home.activation = {
                 createZshrcSymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
                   if [ ! -L "$HOME/.zshrc" ]; then
@@ -96,3 +107,4 @@
     darwinPackages = self.darwinConfigurations."sadiq".pkgs;
   };
 }
+
