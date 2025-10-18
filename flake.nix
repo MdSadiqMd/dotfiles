@@ -41,7 +41,7 @@
         enable = true;
         casks = [
           "hammerspoon"
-          "ghostty"
+	  "ghostty"
           "alt-tab"
         ];
 	brews = [
@@ -98,6 +98,13 @@
                   if [ ! -L "$HOME/.zshrc" ]; then
                     echo "Creating symlink from ~/.zshrc to nix folder..."
                     $DRY_RUN_CMD ln -sf "/Users/sadiq/.config/nix/.zshrc" "$HOME/.zshrc"
+                  fi
+                '';
+
+		createGhosttySymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
+                  if [ -f "/Applications/Ghostty.app/Contents/MacOS/Ghostty" ] && [ ! -L "/usr/local/bin/ghostty" ]; then
+                    echo "Creating symlink for Ghostty..."
+                    $DRY_RUN_CMD sudo ln -sf "/Applications/Ghostty.app/Contents/MacOS/Ghostty" "/usr/local/bin/ghostty"
                   fi
                 '';
               };
