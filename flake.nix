@@ -44,6 +44,11 @@
           "ghostty"
           "alt-tab"
         ];
+	brews = [
+    	  "fzf"
+    	  "zoxide"
+    	  "gnupg"
+  	];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
         onActivation.upgrade = true;
