@@ -86,30 +86,33 @@
             useGlobalPkgs = true;
             useUserPackages = true;
             users.sadiq = { config, lib, pkgs, ... }: {
-              home = {
-                homeDirectory = "/Users/sadiq";
-                stateVersion = "24.05";
-                username = "sadiq";
-              };
+		home = {
+    homeDirectory = "/Users/sadiq";
+    stateVersion = "24.05";
+    username = "sadiq";
+  };
 
+  # Use absolute path string, NOT a relative path
+  xdg.configFile."ghostty/config".source = 
+    config.lib.file.mkOutOfStoreSymlink "/Users/sadiq/.config/nix/ghostty-config";
 
-              home.activation = {
-                createZshrcSymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
-                  if [ ! -L "$HOME/.zshrc" ]; then
-                    echo "Creating symlink from ~/.zshrc to nix folder..."
-                    $DRY_RUN_CMD ln -sf "/Users/sadiq/.config/nix/.zshrc" "$HOME/.zshrc"
-                  fi
-                '';
+  home.activation = {
+    createZshrcSymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
+      if [ ! -L "$HOME/.zshrc" ]; then
+        echo "Creating symlink from ~/.zshrc to nix folder..."
+        $DRY_RUN_CMD ln -sf "/Users/sadiq/.config/nix/.zshrc" "$HOME/.zshrc"
+      fi
+    '';
 
-		createGhosttySymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
-                  if [ -f "/Applications/Ghostty.app/Contents/MacOS/Ghostty" ] && [ ! -L "/usr/local/bin/ghostty" ]; then
-                    echo "Creating symlink for Ghostty..."
-                    $DRY_RUN_CMD sudo ln -sf "/Applications/Ghostty.app/Contents/MacOS/Ghostty" "/usr/local/bin/ghostty"
-                  fi
-                '';
-              };
+    createGhosttySymlink = lib.hm.dag.entryAfter ["writeBoundary"] ''
+      if [ -f "/Applications/Ghostty.app/Contents/MacOS/Ghostty" ] && [ ! -L "/usr/local/bin/ghostty" ]; then
+        echo "Creating symlink for Ghostty..."
+        $DRY_RUN_CMD sudo ln -sf "/Applications/Ghostty.app/Contents/MacOS/Ghostty" "/usr/local/bin/ghostty"
+      fi
+    '';
+  };
 
-              programs.zsh.enable = false;
+  programs.zsh.enable = false;
             };
           };
         }
