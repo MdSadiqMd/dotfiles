@@ -43,6 +43,7 @@
           "hammerspoon"
 	  "ghostty"
           "alt-tab"
+	  "docker"
         ];
 	brews = [
     	  "fzf"
