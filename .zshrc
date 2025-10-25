@@ -42,13 +42,9 @@ alias ls='ls --color'
 eval "$(fzf --zsh)"
 eval "$(zoxide init --cmd cd zsh)"
 
-# Fix compinit issue (missing _docker or other completions)
-autoload -Uz compinit
-compinit -u
-
 # GPG configuration
 export GPG_TTY=$(tty)
-gpgconf --launch gpg-agent
+gpgconf --kill gpg-agent 2>/dev/null
 
 # Zoxide initialization
 eval "$(zoxide init zsh)"
@@ -71,8 +67,16 @@ zinit light zsh-users/zsh-completions
 zinit light zsh-users/zsh-autosuggestions
 zinit light Aloxaf/fzf-tab
 
+ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=20
+ZSH_AUTOSUGGEST_USE_ASYNC=1
+
 # Load Completions
-autoload -U compinit && compinit
+autoload -Uz compinit
+if [[ -n ${ZDOTDIR}/.zcompdump(#qNmh+24) ]]; then
+  compinit
+else
+  compinit -C
+fi
 
 # Load Powerlevel10k configuration
 [[ ! -f ~/.config/nix/.p10k.zsh ]] || source ~/.config/nix/.p10k.zsh
