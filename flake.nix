@@ -49,6 +49,7 @@
     	  "fzf"
     	  "zoxide"
     	  "gnupg"
+	  "pinentry-mac"
   	];
         onActivation.cleanup = "zap";
         onActivation.autoUpdate = true;
