@@ -45,6 +45,7 @@ eval "$(zoxide init --cmd cd zsh)"
 # GPG configuration
 export GPG_TTY=$(tty)
 gpgconf --kill gpg-agent 2>/dev/null
+gpgconf --launch gpg-agent
 
 # Zoxide initialization
 eval "$(zoxide init zsh)"
