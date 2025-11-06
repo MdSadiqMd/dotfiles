@@ -31,6 +31,7 @@
         rust-bin.stable."1.87.0".default
         nodejs_20
         nodePackages.typescript
+	postgresql_17
       ];
 
       environment.variables = {
@@ -44,6 +45,7 @@
 	  "ghostty"
           "alt-tab"
 	  "docker"
+	  "rustdesk"
         ];
 	brews = [
     	  "fzf"

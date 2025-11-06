@@ -113,3 +113,10 @@ typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
 export GOPATH="$HOME/go"
 export PATH="$GOPATH/bin:$PATH"
 
+
+# bun completions
+[ -s "/Users/sadiq/.bun/_bun" ] && source "/Users/sadiq/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
