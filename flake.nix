@@ -32,6 +32,7 @@
         nodejs_20
         nodePackages.typescript
 	postgresql_17
+	python311
       ];
 
       environment.variables = {
