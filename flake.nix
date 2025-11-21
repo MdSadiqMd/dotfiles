@@ -33,6 +33,7 @@
         nodePackages.typescript
 	postgresql_17
 	python311
+	nixfmt-rfc-style
       ];
 
       environment.variables = {
