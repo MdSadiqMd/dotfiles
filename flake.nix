@@ -39,12 +39,15 @@
             obsidian
             git
             go_1_24
-            rust-bin.stable."1.87.0".default
             nodejs_20
             nodePackages.typescript
             postgresql_17
             python311
             nixfmt
+            (rust-bin.stable."1.87.0".default.override {
+              extensions = [ "clippy" ];
+            })
+            rustup
           ];
 
           environment.variables = {
