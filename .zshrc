@@ -4,6 +4,20 @@ if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
 fi
 export PATH="$HOME/.nix-profile/bin:$PATH"
 
+function git_status_counts() {
+  local git_status=$(git status --porcelain=v2 2>/dev/null)
+  if [[ -n "$git_status" ]]; then
+    local added=$(echo "$git_status" | grep '^A\|^??' | wc -l | tr -d ' ')
+    local modified=$(echo "$git_status" | grep -E '^( |M|D|R)' | wc -l | tr -d ' ')
+    
+    local git_info=""
+    [[ $added -gt 0 ]] && git_info+="%F{green}+${added}%f"
+    [[ $modified -gt 0 ]] && git_info+=" %F{yellow}~${modified}%f"
+    
+    echo "${git_info}"
+  fi
+}
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
@@ -95,7 +109,7 @@ COMPLETION_WAITING_DOTS="true"
 # Zsh prompt initialization
 autoload -Uz promptinit
 promptinit
-prompt adam1
+# prompt adam1
 
 # Disable auto-update notifications (optional)
 # zstyle ':omz:update' mode disabled
@@ -120,3 +134,7 @@ export PATH="$GOPATH/bin:$PATH"
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+export PATH="$HOME/.npm-global/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
