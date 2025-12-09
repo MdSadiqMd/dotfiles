@@ -150,9 +150,9 @@
   # No dirty icon since we show individual counts.
   typeset -g POWERLEVEL9K_VCS_DIRTY_ICON=
   # Show '⇣' if local branch is behind remote (needs pull).
-  typeset -g POWERLEVEL9K_VCS_INCOMING_CHANGES_ICON=' %F{cyan}⇣'
+  typeset -g POWERLEVEL9K_VCS_INCOMING_CHANGES_ICON='%F{cyan}⇣'
   # Show '⇡' if local branch is ahead of remote (needs push).
-  typeset -g POWERLEVEL9K_VCS_OUTGOING_CHANGES_ICON=' %F{cyan}⇡'
+  typeset -g POWERLEVEL9K_VCS_OUTGOING_CHANGES_ICON='%F{cyan}⇡'
   # Show the number of commits ahead/behind.
   typeset -g POWERLEVEL9K_VCS_COMMITS_AHEAD_MAX_NUM=-1
   typeset -g POWERLEVEL9K_VCS_COMMITS_BEHIND_MAX_NUM=-1
