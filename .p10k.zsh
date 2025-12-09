@@ -149,12 +149,13 @@
   typeset -g POWERLEVEL9K_VCS_UNTRACKED_MAX_NUM=-1
   # No dirty icon since we show individual counts.
   typeset -g POWERLEVEL9K_VCS_DIRTY_ICON=
-  # Show '⇣' if local branch is behind remote.
-  typeset -g POWERLEVEL9K_VCS_INCOMING_CHANGES_ICON=':⇣'
-  # Show '⇡' if local branch is ahead of remote.
-  typeset -g POWERLEVEL9K_VCS_OUTGOING_CHANGES_ICON=':⇡'
-  # Don't show the number of commits next to the ahead/behind arrows.
-  typeset -g POWERLEVEL9K_VCS_{COMMITS_AHEAD,COMMITS_BEHIND}_MAX_NUM=1
+  # Show '⇣' if local branch is behind remote (needs pull).
+  typeset -g POWERLEVEL9K_VCS_INCOMING_CHANGES_ICON=' %F{cyan}⇣'
+  # Show '⇡' if local branch is ahead of remote (needs push).
+  typeset -g POWERLEVEL9K_VCS_OUTGOING_CHANGES_ICON=' %F{cyan}⇡'
+  # Show the number of commits ahead/behind.
+  typeset -g POWERLEVEL9K_VCS_COMMITS_AHEAD_MAX_NUM=-1
+  typeset -g POWERLEVEL9K_VCS_COMMITS_BEHIND_MAX_NUM=-1
   # Simplify content expansion to preserve spacing.
   typeset -g POWERLEVEL9K_VCS_CONTENT_EXPANSION='${P9K_CONTENT}'
 
