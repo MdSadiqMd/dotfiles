@@ -68,6 +68,7 @@
               "zoxide"
               "gnupg"
               "pinentry-mac"
+	      "tree"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
