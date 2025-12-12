@@ -39,6 +39,7 @@
             obsidian
             git
             go_1_24
+            neovim
             nodejs_20
             nodePackages.typescript
             postgresql_17
@@ -68,7 +69,7 @@
               "zoxide"
               "gnupg"
               "pinentry-mac"
-	      "tree"
+              "tree"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
