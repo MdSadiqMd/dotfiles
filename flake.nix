@@ -1,5 +1,5 @@
 {
-  description = "Example nix-darwin system flake with .zshrc in nix folder";
+  description = "I use Nix btw";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
