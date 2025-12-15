@@ -61,7 +61,7 @@
               "hammerspoon"
               "ghostty"
               "alt-tab"
-              "docker"
+              "docker-desktop"
               "rustdesk"
             ];
             brews = [
