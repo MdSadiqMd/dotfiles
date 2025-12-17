@@ -70,6 +70,8 @@
               "gnupg"
               "pinentry-mac"
               "tree"
+              "htop"
+              "watch"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
