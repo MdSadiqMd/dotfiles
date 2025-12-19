@@ -2,8 +2,8 @@
   description = "I use Nix btw";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    nix-darwin.url = "github:nix-darwin/nix-darwin/master";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nix-darwin.url = "github:LnL7/nix-darwin/nix-darwin-25.11";
     nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
     mac-app-util.url = "github:hraban/mac-app-util";
     nix-homebrew.url = "github:zhaofengli-wip/nix-homebrew";
@@ -94,6 +94,7 @@
             postgresql_17
             python311
             nixfmt
+            nh
             (rust-bin.stable."1.87.0".default.override {
               extensions = [ "clippy" ];
             })
@@ -156,6 +157,7 @@
               user = "sadiq";
             };
           }
+
           home-manager.darwinModules.home-manager
           {
             home-manager = {
@@ -201,7 +203,6 @@
           }
         ];
       };
-
       darwinPackages = self.darwinConfigurations."sadiq".pkgs;
     };
 }
