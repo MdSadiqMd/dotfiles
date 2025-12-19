@@ -57,9 +57,30 @@
             # This allows rollback without redownloading
             keep-derivations = true;
 
+            # Supress Warnings
+            warn-dirty = false;
+
             # WARNING: Only enable if you have space or develop frequently
             # keep-outputs = false;  # Default - reclaims build-time deps
           };
+
+          # Disable Nix store optimization as it causes issues with macOS hardlinking and takes too long to complete
+          # system.activationScripts.extraActivation.text = pkgs.lib.mkAfter ''
+          #   LOCK=/tmp/nix-optimise.lock
+
+          #   if [ -e "$LOCK" ]; then
+          #     echo "Nix store optimization already running, skipping."
+          #   else
+          #     touch "$LOCK"
+          #     echo "Running Nix store optimization in background..."
+
+          #     nohup ${pkgs.nix}/bin/nix-store --optimise \
+          #       2> >(grep -v "skipping suspicious writable file" >&2) \
+          #       >/tmp/nix-store-optimise.log \
+          #       && rm -f "$LOCK" &
+
+          #   fi
+          # '';
 
           # Install specific versions of development tools
           environment.systemPackages = with pkgs; [
@@ -69,7 +90,7 @@
             go_1_24
             neovim
             nodejs_20
-            nodePackages.typescript
+            typescript
             postgresql_17
             python311
             nixfmt
