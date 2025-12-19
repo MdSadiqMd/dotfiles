@@ -36,12 +36,30 @@
           nix.gc = {
             automatic = true;
             interval = {
-              Hour = 3;
-              Minute = 15;
+              Weekday = 5;
+              Hour = 22;
+              Minute = 0;
             };
-            options = "--delete-older-than 10d";
+            options = "--delete-older-than 14d";
           };
-          nix.optimise.automatic = true;
+
+          # Disable automatic optimization due to macOS hardlinking issues
+          nix.optimise.automatic = false;
+
+          # space-aware settings
+          nix.settings = {
+            # Trigger GC when free space drops below 100MB
+            # Stop GC when 1GB is available (prevents excessive GC runs)
+            min-free = 100 * 1024 * 1024; # 100 MB
+            max-free = 1024 * 1024 * 1024; # 1 GB
+
+            # Keep derivations (.drv files) to enable quick rebuilds
+            # This allows rollback without redownloading
+            keep-derivations = true;
+
+            # WARNING: Only enable if you have space or develop frequently
+            # keep-outputs = false;  # Default - reclaims build-time deps
+          };
 
           # Install specific versions of development tools
           environment.systemPackages = with pkgs; [
