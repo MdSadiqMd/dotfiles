@@ -122,6 +122,7 @@
               "tree"
               "htop"
               "watch"
+              "protobuf"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
