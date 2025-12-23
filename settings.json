@@ -20,7 +20,7 @@
       "element.active": "#24273736",
       "ghost_element.selected": "#24273736",
       "element.selected": "#41486936",
-      "element.hover": "#41486936"
+      "element.hover": "#41486936",
     },
     "One Dark Pro": {
       "editor.background": "#282c34",
@@ -41,5 +41,9 @@
         "#56b6c2",
       ],
     },
+  },
+  "tabs": {
+    "git_status": true,
+    "file_icons": true,
   },
 }
