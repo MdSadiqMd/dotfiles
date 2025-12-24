@@ -108,6 +108,7 @@
           homebrew = {
             enable = true;
             casks = [
+              "anydesk"
               "hammerspoon"
               "ghostty"
               "alt-tab"
