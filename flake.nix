@@ -92,9 +92,15 @@
             nodejs_20
             typescript
             postgresql_17
-            python311
             nixfmt
             nh
+            python311
+            (python311.withPackages (
+              ps: with ps; [
+                pip
+                virtualenv
+              ]
+            ))
             (rust-bin.stable."1.87.0".default.override {
               extensions = [ "clippy" ];
             })
