@@ -130,6 +130,8 @@
               "htop"
               "watch"
               "protobuf"
+              "kubectl"
+              "kind"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
