@@ -14,6 +14,18 @@
       "milliseconds": 10,
     },
   },
+  "languages": {
+    "Go": {
+      "formatter": {
+        "external": {
+          "command": "gofmt",
+          "arguments": ["-s"],
+        },
+      },
+      "format_on_save": "on",
+    },
+  },
+  "format_on_save": "on",
   "theme_overrides": {
     "Tokyo Night": {
       "tab.active_background": "#24273736",
