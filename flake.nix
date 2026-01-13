@@ -120,7 +120,7 @@
               "alt-tab"
               "docker-desktop"
               "rustdesk"
-              "wireshark"
+              "wireshark-app"
             ];
             brews = [
               "fzf"
@@ -133,6 +133,7 @@
               "protobuf"
               "kubectl"
               "kind"
+              "kubeshark"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
