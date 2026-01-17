@@ -126,6 +126,7 @@
               "fzf"
               "zoxide"
               "gnupg"
+              "ffmpeg"
               "pinentry-mac"
               "tree"
               "htop"
