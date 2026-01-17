@@ -3,6 +3,7 @@ if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
   . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 fi
 export PATH="$HOME/.nix-profile/bin:$PATH"
+export PATH="$HOME/.avm/bin:$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
 function git_status_counts() {
   local git_status=$(git status --porcelain=v2 2>/dev/null)
@@ -146,3 +147,7 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 # Added by Antigravity
 export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
 export PATH="/Users/sadiq/.local/bin:$PATH"
+
+# Solana
+PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
