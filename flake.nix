@@ -115,6 +115,7 @@
             clang
             libiconv
             perl
+            curl
           ];
 
           environment.variables = {
@@ -163,7 +164,6 @@
         system = "aarch64-darwin";
 
         modules = [
-          # Add rust-overlay
           (
             { pkgs, ... }:
             {
@@ -201,6 +201,10 @@
                     username = "sadiq";
                   };
 
+                  home.packages = with pkgs; [
+                    curl
+                  ];
+
                   # Use absolute path string, NOT a relative path
                   xdg.configFile."ghostty/config".source =
                     config.lib.file.mkOutOfStoreSymlink "/Users/sadiq/.config/nix/ghostty-config";
@@ -220,7 +224,31 @@
                       fi
                     '';
 
-                    # Clean home-manager generations
+                    installSurfpool = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+                      if [ -x "$HOME/.local/bin/surfpool" ]; then
+                        echo "surfpool already installed at $HOME/.local/bin/surfpool, skipping..."
+                      else
+                        echo "Installing surfpool via official installer..."
+
+                        # Prevent installer from modifying real shell config
+                        export ZDOTDIR="$(mktemp -d)"
+                        export HOME="$ZDOTDIR"
+
+                        $DRY_RUN_CMD \
+                          ${pkgs.curl}/bin/curl -sL https://run.surfpool.run/ \
+                          | env \
+                              PATH=${pkgs.curl}/bin:${pkgs.gzip}/bin:${pkgs.gnutar}/bin:${pkgs.coreutils}/bin:${pkgs.bash}/bin \
+                              bash
+
+                        # Move binary to the real location ourselves (idempotent)
+                        if [ -x "$ZDOTDIR/.local/bin/surfpool" ]; then
+                          mkdir -p "$REAL_HOME/.local/bin"
+                          mv "$ZDOTDIR/.local/bin/surfpool" "$REAL_HOME/.local/bin/surfpool"
+                          chmod +x "$REAL_HOME/.local/bin/surfpool"
+                        fi
+                      fi
+                    '';
+
                     cleanupHomeGenerations = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
                       echo "Cleaning up old home-manager generations (keeping last 5)..."
                       $DRY_RUN_CMD ${pkgs.nix}/bin/nix-env --delete-generations +5 --profile "$HOME/.local/state/home-manager/profiles/home-manager" 2>/dev/null || true

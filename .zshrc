@@ -139,3 +139,4 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 
 # Added by Antigravity
 export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+export PATH="/Users/sadiq/.local/bin:$PATH"
