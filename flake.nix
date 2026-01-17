@@ -23,7 +23,7 @@
     }:
     let
       configuration =
-        { pkgs, ... }:
+        { pkgs, lib, ... }:
         {
           system.primaryUser = "sadiq";
           nixpkgs.config.allowUnfree = true;
@@ -64,26 +64,26 @@
             # keep-outputs = false;  # Default - reclaims build-time deps
           };
 
-          # Disable Nix store optimization as it causes issues with macOS hardlinking and takes too long to complete
-          # system.activationScripts.extraActivation.text = pkgs.lib.mkAfter ''
-          #   LOCK=/tmp/nix-optimise.lock
+          # Clean old generations on system activation (rebuild/reboot)
+          system.activationScripts.cleanupGenerations.text = ''
+            echo "Cleaning up old Nix generations (keeping last 5)..."
 
-          #   if [ -e "$LOCK" ]; then
-          #     echo "Nix store optimization already running, skipping."
-          #   else
-          #     touch "$LOCK"
-          #     echo "Running Nix store optimization in background..."
+            # Delete old system generations (keep last 5)
+            ${pkgs.nix}/bin/nix-env --delete-generations +5 --profile /nix/var/nix/profiles/system 2>/dev/null || true
 
-          #     nohup ${pkgs.nix}/bin/nix-store --optimise \
-          #       2> >(grep -v "skipping suspicious writable file" >&2) \
-          #       >/tmp/nix-store-optimise.log \
-          #       && rm -f "$LOCK" &
+            # Delete old user generations (keep last 5)
+            sudo -u sadiq ${pkgs.nix}/bin/nix-env --delete-generations +5 2>/dev/null || true
 
-          #   fi
-          # '';
+            # Run garbage collection to free up space
+            echo "Running garbage collection..."
+            ${pkgs.nix}/bin/nix-collect-garbage -d 2>/dev/null || true
+
+            echo "Cleanup complete!"
+          '';
 
           # Install specific versions of development tools
           environment.systemPackages = with pkgs; [
+            anchor
             vim
             obsidian
             git
@@ -102,9 +102,19 @@
               ]
             ))
             (rust-bin.stable."1.87.0".default.override {
-              extensions = [ "clippy" ];
+              extensions = [
+                "clippy"
+                "rust-src"
+              ];
+              targets = [ "wasm32-unknown-unknown" ];
             })
             rustup
+            yarn
+            pkg-config
+            openssl
+            clang
+            libiconv
+            perl
           ];
 
           environment.variables = {
@@ -135,6 +145,7 @@
               "kubectl"
               "kind"
               "kubeshark"
+              "solana"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
@@ -207,6 +218,12 @@
                         echo "Creating symlink for Ghostty..."
                         $DRY_RUN_CMD sudo ln -sf "/Applications/Ghostty.app/Contents/MacOS/Ghostty" "/usr/local/bin/ghostty"
                       fi
+                    '';
+
+                    # Clean home-manager generations
+                    cleanupHomeGenerations = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+                      echo "Cleaning up old home-manager generations (keeping last 5)..."
+                      $DRY_RUN_CMD ${pkgs.nix}/bin/nix-env --delete-generations +5 --profile "$HOME/.local/state/home-manager/profiles/home-manager" 2>/dev/null || true
                     '';
                   };
 
