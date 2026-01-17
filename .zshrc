@@ -18,6 +18,12 @@ function git_status_counts() {
   fi
 }
 
+if command -v xcrun >/dev/null; then
+  export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+  export LIBRARY_PATH="$SDKROOT/usr/lib:$LIBRARY_PATH"
+  export CPATH="$SDKROOT/usr/include:$CPATH"
+fi
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"

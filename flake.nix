@@ -120,6 +120,7 @@
 
           environment.variables = {
             HOMEBREW_NO_ANALYTICS = "1";
+            LIBRARY_PATH = "${pkgs.libiconv}/lib";
           };
 
           homebrew = {
