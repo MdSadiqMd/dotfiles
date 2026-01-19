@@ -92,6 +92,7 @@
             nodejs_20
             typescript
             postgresql_17
+            protobuf
             nixfmt
             nh
             python311
@@ -143,7 +144,6 @@
               "tree"
               "htop"
               "watch"
-              "protobuf"
               "kubectl"
               "kind"
               "kubeshark"
