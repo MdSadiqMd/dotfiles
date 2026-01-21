@@ -136,6 +136,7 @@
               "wireshark-app"
             ];
             brews = [
+              "b2-tools"
               "fzf"
               "zoxide"
               "gnupg"
