@@ -15,6 +15,27 @@
     },
   },
   "languages": {
+    "TypeScript": {
+      "language_servers": ["vtsls", "..."],
+      "format_on_save": "on",
+      "tab_size": 2,
+      "show_completions_on_input": true,
+      "enable_language_server": true,
+    },
+    "TSX": {
+      "language_servers": ["vtsls", "..."],
+      "format_on_save": "on",
+      "tab_size": 2,
+      "show_completions_on_input": true,
+      "enable_language_server": true,
+    },
+    "JavaScript": {
+      "language_servers": ["vtsls", "..."],
+      "format_on_save": "on",
+      "tab_size": 2,
+      "show_completions_on_input": true,
+      "enable_language_server": true,
+    },
     "Go": {
       "formatter": {
         "external": {
@@ -25,7 +46,52 @@
       "format_on_save": "on",
     },
   },
+  "lsp": {
+    "vtsls": {
+      "settings": {
+        "typescript": {
+          "suggest": {
+            "autoImports": true,
+            "paths": true,
+            "completeFunctionCalls": true,
+          },
+          "preferences": {
+            "importModuleSpecifier": "relative",
+            "includeInlayParameterNameHints": "all",
+            "includeInlayFunctionParameterTypeHints": true,
+            "includeInlayVariableTypeHints": true,
+            "includeInlayPropertyDeclarationTypeHints": true,
+            "includeInlayFunctionLikeReturnTypeHints": true,
+            "includeInlayEnumMemberValueHints": true,
+          },
+          "tsserver": {
+            "maxTsServerMemory": 8092,
+          },
+        },
+        "javascript": {
+          "suggest": {
+            "autoImports": true,
+            "paths": true,
+            "completeFunctionCalls": true,
+          },
+          "preferences": {
+            "importModuleSpecifier": "relative",
+            "includeInlayParameterNameHints": "all",
+            "includeInlayFunctionParameterTypeHints": true,
+            "includeInlayVariableTypeHints": true,
+            "includeInlayPropertyDeclarationTypeHints": true,
+            "includeInlayFunctionLikeReturnTypeHints": true,
+            "includeInlayEnumMemberValueHints": true,
+          },
+          "tsserver": {
+            "maxTsServerMemory": 8092,
+          },
+        },
+      },
+    },
+  },
   "format_on_save": "on",
+  "show_completions_on_input": true,
   "theme_overrides": {
     "Tokyo Night": {
       "tab.active_background": "#24273736",
