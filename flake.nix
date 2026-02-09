@@ -251,6 +251,36 @@
                       fi
                     '';
 
+                    installGitButler = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+                      if [ -x "$HOME/.local/bin/but" ]; then
+                        echo "GitButler already installed, skipping..."
+                      else
+                        echo "Installing GitButler (sandboxed)..."
+
+                        export ZDOTDIR="$(mktemp -d)"
+                        export REAL_HOME="$HOME"
+                        export HOME="$ZDOTDIR"
+
+                        ${pkgs.curl}/bin/curl -fsSL https://gitbutler.com/install.sh \
+                          | env PATH=${
+                            lib.makeBinPath [
+                              pkgs.curl
+                              pkgs.bash
+                              pkgs.coreutils
+                              pkgs.gnugrep
+                              pkgs.gnused
+                              pkgs.gawk
+                            ]
+                          } bash
+
+                        if [ -x "$ZDOTDIR/.local/bin/but" ]; then
+                          mkdir -p "$REAL_HOME/.local/bin"
+                          mv "$ZDOTDIR/.local/bin/but" "$REAL_HOME/.local/bin/but"
+                          chmod +x "$REAL_HOME/.local/bin/but"
+                        fi
+                      fi
+                    '';
+
                     cleanupHomeGenerations = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
                       echo "Cleaning up old home-manager generations (keeping last 5)..."
                       $DRY_RUN_CMD ${pkgs.nix}/bin/nix-env --delete-generations +5 --profile "$HOME/.local/state/home-manager/profiles/home-manager" 2>/dev/null || true
