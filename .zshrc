@@ -151,3 +151,6 @@ export PATH="/Users/sadiq/.local/bin:$PATH"
 # Solana
 PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+# Generated for envman. Do not edit.
+[ -s "$HOME/.config/envman/load.sh" ] && source "$HOME/.config/envman/load.sh"
