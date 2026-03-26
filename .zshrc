@@ -154,3 +154,10 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
 # Generated for envman. Do not edit.
 [ -s "$HOME/.config/envman/load.sh" ] && source "$HOME/.config/envman/load.sh"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+export NARGO_HOME="/Users/sadiq/.nargo"
+
+export PATH="$PATH:$NARGO_HOME/bin"
