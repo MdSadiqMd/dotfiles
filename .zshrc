@@ -161,3 +161,33 @@ export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
 export NARGO_HOME="/Users/sadiq/.nargo"
 
 export PATH="$PATH:$NARGO_HOME/bin"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Mesh compiler
+. "/Users/sadiq/.mesh/env"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+
+# Added by Antigravity
+export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
+export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
+export MESHER_MESHC_BIN="$HOME/Developer/mesh-lang/target/debug/meshc"
+export MESHER_MESHC_SOURCE="$HOME/Developer/mesh-lang"
