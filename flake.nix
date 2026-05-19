@@ -43,10 +43,8 @@
             options = "--delete-older-than 14d";
           };
 
-          # Disable automatic optimization due to macOS hardlinking issues
           nix.optimise.automatic = false;
 
-          # space-aware settings
           nix.settings = {
             # Trigger GC when free space drops below 100MB
             # Stop GC when 1GB is available (prevents excessive GC runs)
@@ -56,36 +54,23 @@
             # Keep derivations (.drv files) to enable quick rebuilds
             # This allows rollback without redownloading
             keep-derivations = true;
-
-            # Supress Warnings
             warn-dirty = false;
-
-            # WARNING: Only enable if you have space or develop frequently
-            # keep-outputs = false;  # Default - reclaims build-time deps
           };
 
-          # Clean old generations on system activation (rebuild/reboot)
           system.activationScripts.cleanupGenerations.text = ''
             echo "Cleaning up old Nix generations (keeping last 5)..."
-
-            # Delete old system generations (keep last 5)
             ${pkgs.nix}/bin/nix-env --delete-generations +5 --profile /nix/var/nix/profiles/system 2>/dev/null || true
-
-            # Delete old user generations (keep last 5)
             sudo -u sadiq ${pkgs.nix}/bin/nix-env --delete-generations +5 2>/dev/null || true
-
-            # Run garbage collection to free up space
             echo "Running garbage collection..."
             ${pkgs.nix}/bin/nix-collect-garbage -d 2>/dev/null || true
-
             echo "Cleanup complete!"
           '';
 
-          # Install specific versions of development tools
           environment.systemPackages = with pkgs; [
             anchor
             vim
             obsidian
+            tmux
             git
             go_1_24
             neovim
@@ -117,15 +102,29 @@
             libiconv
             perl
             curl
+            erlang
+            elixir
+            beamPackages.rebar3
+            beamPackages.hex
+            nodePackages.npm
+            nodePackages.yarn
+            nodePackages.node2nix
+            watchexec
+            ncurses
+            libyaml
           ];
 
           environment.variables = {
             HOMEBREW_NO_ANALYTICS = "1";
             LIBRARY_PATH = "${pkgs.libiconv}/lib";
+            ERL_AFLAGS = "-kernel shell_history enabled";
           };
 
           homebrew = {
             enable = true;
+            taps = [
+              "rtk-ai/tap"
+            ];
             casks = [
               "anydesk"
               "hammerspoon"
@@ -149,6 +148,8 @@
               "kind"
               "kubeshark"
               "solana"
+              "rtk"
+              "just"
             ];
             onActivation.cleanup = "zap";
             onActivation.autoUpdate = true;
@@ -176,6 +177,7 @@
           configuration
           mac-app-util.darwinModules.default
           nix-homebrew.darwinModules.nix-homebrew
+
           {
             nix-homebrew = {
               enable = true;
@@ -185,10 +187,12 @@
           }
 
           home-manager.darwinModules.home-manager
+
           {
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
+
               users.sadiq =
                 {
                   config,
@@ -207,7 +211,6 @@
                     curl
                   ];
 
-                  # Use absolute path string, NOT a relative path
                   xdg.configFile."ghostty/config".source =
                     config.lib.file.mkOutOfStoreSymlink "/Users/sadiq/.config/nix/ghostty-config";
 
@@ -293,6 +296,7 @@
           }
         ];
       };
+
       darwinPackages = self.darwinConfigurations."sadiq".pkgs;
     };
 }
