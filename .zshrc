@@ -191,3 +191,14 @@ export PATH="/Users/sadiq/.antigravity/antigravity/bin:$PATH"
 export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
 export MESHER_MESHC_BIN="$HOME/Developer/mesh-lang/target/debug/meshc"
 export MESHER_MESHC_SOURCE="$HOME/Developer/mesh-lang"
+
+# opencode
+export PATH=/Users/sadiq/.opencode/bin:$PATH
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+. "$HOME/.local/bin/env"
+
+export PATH="$PATH:/Users/sadiq/.risc0/bin"
