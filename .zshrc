@@ -202,3 +202,4 @@ export NVM_DIR="$HOME/.nvm"
 . "$HOME/.local/bin/env"
 
 export PATH="$PATH:/Users/sadiq/.risc0/bin"
+export PATH="$PATH:/Applications/Tailscale.app/Contents/MacOS/Tailscale status"
