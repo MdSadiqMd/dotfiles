@@ -7,7 +7,8 @@
     nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
     mac-app-util.url = "github:hraban/mac-app-util";
     nix-homebrew.url = "github:zhaofengli-wip/nix-homebrew";
-    home-manager.url = "github:nix-community/home-manager";
+    home-manager.url = "github:nix-community/home-manager/release-25.11";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
     rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
@@ -69,6 +70,7 @@
           environment.systemPackages = with pkgs; [
             anchor
             vim
+            lean4
             obsidian
             tmux
             git
@@ -94,6 +96,9 @@
               ];
               targets = [ "wasm32-unknown-unknown" ];
             })
+            wasm-pack
+            wasm-bindgen-cli
+            binaryen
             rustup
             yarn
             pkg-config
@@ -169,8 +174,32 @@
         modules = [
           (
             { pkgs, ... }:
+            let
+              disableNodeTests = final: prev: {
+                nodejs = prev.nodejs.overrideAttrs (old: {
+                  doCheck = false;
+                });
+                nodejs_22 =
+                  if prev ? nodejs_22 then
+                    prev.nodejs_22.overrideAttrs (old: {
+                      doCheck = false;
+                    })
+                  else
+                    null;
+                nodejs_20 =
+                  if prev ? nodejs_20 then
+                    prev.nodejs_20.overrideAttrs (old: {
+                      doCheck = false;
+                    })
+                  else
+                    null;
+              };
+            in
             {
-              nixpkgs.overlays = [ rust-overlay.overlays.default ];
+              nixpkgs.overlays = [
+                rust-overlay.overlays.default
+                disableNodeTests
+              ];
             }
           )
 
@@ -205,6 +234,7 @@
                     homeDirectory = "/Users/sadiq";
                     stateVersion = "24.05";
                     username = "sadiq";
+                    enableNixpkgsReleaseCheck = false;
                   };
 
                   home.packages = with pkgs; [
@@ -250,36 +280,6 @@
                           mkdir -p "$REAL_HOME/.local/bin"
                           mv "$ZDOTDIR/.local/bin/surfpool" "$REAL_HOME/.local/bin/surfpool"
                           chmod +x "$REAL_HOME/.local/bin/surfpool"
-                        fi
-                      fi
-                    '';
-
-                    installGitButler = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-                      if [ -x "$HOME/.local/bin/but" ]; then
-                        echo "GitButler already installed, skipping..."
-                      else
-                        echo "Installing GitButler (sandboxed)..."
-
-                        export ZDOTDIR="$(mktemp -d)"
-                        export REAL_HOME="$HOME"
-                        export HOME="$ZDOTDIR"
-
-                        ${pkgs.curl}/bin/curl -fsSL https://gitbutler.com/install.sh \
-                          | env PATH=${
-                            lib.makeBinPath [
-                              pkgs.curl
-                              pkgs.bash
-                              pkgs.coreutils
-                              pkgs.gnugrep
-                              pkgs.gnused
-                              pkgs.gawk
-                            ]
-                          } bash
-
-                        if [ -x "$ZDOTDIR/.local/bin/but" ]; then
-                          mkdir -p "$REAL_HOME/.local/bin"
-                          mv "$ZDOTDIR/.local/bin/but" "$REAL_HOME/.local/bin/but"
-                          chmod +x "$REAL_HOME/.local/bin/but"
                         fi
                       fi
                     '';
