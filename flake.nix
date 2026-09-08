@@ -204,6 +204,7 @@
           )
 
           configuration
+          ./nosleep.nix
           mac-app-util.darwinModules.default
           nix-homebrew.darwinModules.nix-homebrew
 
