@@ -203,3 +203,9 @@ export NVM_DIR="$HOME/.nvm"
 
 export PATH="$PATH:/Users/sadiq/.risc0/bin"
 export PATH="$PATH:/Applications/Tailscale.app/Contents/MacOS/Tailscale status"
+
+
+
+
+
+. "/Users/sadiq/.local/bin/watcher-env"
