@@ -1,4 +1,4 @@
-font-family = "JetBrains Mono"
+font-family = "JetBrainsMono Nerd Font Mono"
 font-size = 15
 font-thicken = true
 palette = 0=#090300
@@ -23,3 +23,19 @@ cursor-color = #a5a2a2
 cursor-text = #090300
 selection-background = #4a4543
 selection-foreground = #a5a2a2
+
+# Cursor parity: forward Cmd shortcuts to nvim (nvim maps them to IDE actions).
+# Reload config with cmd+shift+, or restart Ghostty after editing.
+keybind = cmd+p=text:\x10
+keybind = cmd+b=text:\x02
+keybind = cmd+w=text:\x17
+keybind = cmd+s=text:\x13
+keybind = cmd+j=text:\x1bj
+keybind = cmd+i=text:\x1bi
+keybind = cmd+slash=text:\x1b/
+keybind = cmd+shift+f=text:\x1bf
+keybind = cmd+shift+p=text:\x1bp
+keybind = cmd+shift+e=text:\x1be
+keybind = cmd+shift+g=text:\x1bG
+keybind = ctrl+shift+backquote=text:\x1bt
+keybind = ctrl+~=text:\x1bt
