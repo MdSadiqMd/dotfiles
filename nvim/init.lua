@@ -90,12 +90,12 @@ P.S. You can delete this when you're done too. It's your config now! :)
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
--- nvim-tree (left sidebar) replaces netrw
+-- neo-tree (left sidebar) replaces netrw
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
-vim.g.have_nerd_font = false
+vim.g.have_nerd_font = true
 
 -- [[ Setting options ]]
 -- See `:help vim.o`
@@ -112,6 +112,8 @@ vim.o.number = true
 vim.o.mouse = 'a'
 -- Cursor-like mouse: right-click shows popup menu, hover events on, smooth scroll
 vim.o.mousemodel = 'popup'
+-- Forgiving double-click window (trackpads): clicks within 1s still multi-click
+vim.o.mousetime = 1000
 pcall(function()
   vim.o.mousemoveevent = true
 end)
@@ -219,12 +221,12 @@ vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower win
 vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
 
 -- [[ Cursor-like IDE layout: explorer left, terminal right ]]
--- Left file explorer (nvim-tree sidebar: tree + git badges, mouse-clickable).
--- Double-click opens files/folders in the middle window (built into nvim-tree).
+-- Left file explorer (neo-tree sidebar, mouse-driven IDE panel).
+-- Single-click previews, double-click pins, files open in the middle window.
 local function toggle_explorer_left()
-  local ok, api = pcall(require, 'nvim-tree.api')
+  local ok, nt = pcall(require, 'neo-tree.command')
   if ok then
-    api.tree.toggle { focus = true }
+    nt.execute { action = 'focus', source = 'filesystem', position = 'left', toggle = true }
   else
     vim.notify('Explorer not installed yet: run :Lazy sync', vim.log.levels.WARN)
   end
@@ -232,7 +234,10 @@ end
 vim.keymap.set('n', '<leader>e', toggle_explorer_left, { desc = '[E]xplorer toggle left' })
 vim.keymap.set({ 'n', 'i', 'v', 't' }, '<C-b>', toggle_explorer_left, { desc = 'Toggle explorer (Cursor Cmd+B)' })
 vim.keymap.set({ 'n', 'i', 'v' }, '<M-e>', function()
-  pcall(vim.cmd, 'NvimTreeFocus')
+  local ok, nt = pcall(require, 'neo-tree.command')
+  if ok then
+    pcall(nt.execute, { action = 'focus', source = 'filesystem', position = 'left' })
+  end
 end, { desc = 'Focus explorer (Cursor Cmd+Shift+E)' })
 
 -- Terminal panel with multiple mouse-clickable tabs (Cursor's bottom/right panel).
@@ -241,8 +246,11 @@ end, { desc = 'Focus explorer (Cursor Cmd+Shift+E)' })
 local ide_terms = {} -- { { buf = bufnr, name = 'zsh' }, ... }
 local ide_term_idx = 0
 local ide_term_dir = 'vertical' -- 'vertical' (right) or 'horizontal' (bottom)
+local ide_term_width = 50 -- vertical panel width (drag the separator to resize)
+local ide_term_height = 15 -- horizontal panel height
 -- Forward declarations: the clickable winbar (below) runs after full startup.
 local ide_term_show, ide_term_new, ide_term_kill, ide_term_next
+local ide_term_buf_cwd
 
 local function ide_term_panel_win()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -417,9 +425,9 @@ ide_term_show = function(idx)
   end
   if not win then
     if ide_term_dir == 'vertical' then
-      vim.cmd 'botright 50vsplit'
+      vim.cmd('botright ' .. ide_term_width .. 'vsplit')
     else
-      vim.cmd 'botright 15split'
+      vim.cmd('botright ' .. ide_term_height .. 'split')
     end
     win = vim.api.nvim_get_current_win()
     vim.w[win].ide_term_panel = true
@@ -427,6 +435,7 @@ ide_term_show = function(idx)
     vim.wo[win].number = false
     vim.wo[win].relativenumber = false
     vim.wo[win].signcolumn = 'no'
+    vim.wo[win].winfixwidth = true -- keep its width when layout rebalances
   end
   vim.api.nvim_win_set_buf(win, ide_terms[ide_term_idx].buf)
   vim.api.nvim_set_current_win(win)
@@ -435,7 +444,7 @@ ide_term_show = function(idx)
   return win
 end
 
-ide_term_new = function()
+ide_term_new = function(cwd)
   ide_term_prune()
   local win = ide_term_panel_win()
   if win then
@@ -443,13 +452,24 @@ ide_term_new = function()
   end
   if not ide_term_panel_win() then
     if ide_term_dir == 'vertical' then
-      vim.cmd 'botright 50vsplit'
+      vim.cmd('botright ' .. ide_term_width .. 'vsplit')
     else
-      vim.cmd 'botright 15split'
+      vim.cmd('botright ' .. ide_term_height .. 'split')
     end
   end
-  vim.cmd 'terminal'
+  -- Fresh scratch buffer first: termopen() needs a job-free buffer, but
+  -- panel windows show live terminals. (:terminal converts in place.)
+  vim.cmd 'enew'
+  local scratch = vim.api.nvim_get_current_buf()
+  if type(cwd) == 'string' and vim.fn.isdirectory(cwd) == 1 then
+    vim.fn.termopen({ vim.o.shell }, { cwd = cwd })
+  else
+    vim.cmd 'terminal'
+  end
   local buf = vim.api.nvim_get_current_buf()
+  if buf ~= scratch then
+    pcall(vim.api.nvim_buf_delete, scratch, { force = true })
+  end
   vim.bo[buf].buflisted = false -- keep the file tabs clean
   ide_terms[#ide_terms + 1] = { buf = buf, name = vim.o.shell:match '([^/]+)$' or 'term' }
   ide_term_idx = #ide_terms
@@ -460,6 +480,7 @@ ide_term_new = function()
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
   vim.wo[win].signcolumn = 'no'
+  vim.wo[win].winfixwidth = true -- keep its width when layout rebalances
   vim.cmd 'startinsert'
   vim.cmd.redrawstatus()
 end
@@ -592,6 +613,7 @@ local function ide_term_split(dir)
   vim.wo[newwin].number = false
   vim.wo[newwin].relativenumber = false
   vim.wo[newwin].signcolumn = 'no'
+  vim.wo[newwin].winfixwidth = true -- keep its width when layout rebalances
   vim.cmd 'startinsert'
   vim.cmd.redrawstatus()
 end
@@ -619,14 +641,212 @@ vim.keymap.set('n', '<leader>ts', function()
   ide_term_split 'horizontal'
 end, { desc = '[T]erminal split stacked' })
 
--- Right-click inside a terminal opens the IDE menu (splits live here).
--- Without this, right-click in a terminal shows nvim's default menu.
+-- Shared helper: middle editor window (not tree, panel, or float).
+function _G.IdeEditorWin()
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(w).relative == '' then
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.bo[b].buftype == '' and vim.bo[b].filetype ~= 'neo-tree' and not vim.w[w].ide_term_panel then
+        return w
+      end
+    end
+  end
+  return nil
+end
+
+-- Resolve a path clicked in terminal output (git status, tracebacks, diffs).
+local function ide_resolve_term_path(fname, test)
+  test = test or function(p)
+    return vim.fn.filereadable(p) == 1
+  end
+  local dirs = {}
+  local function push_ancestors(d)
+    local depth = 0
+    while d and d ~= '' and depth < 15 do
+      dirs[#dirs + 1] = d
+      local parent = vim.fn.fnamemodify(d, ':h')
+      if parent == d then
+        break
+      end
+      d = parent
+      depth = depth + 1
+    end
+  end
+  -- Nearest match upward (Node-style): covers same-dir files and
+  -- repo-root-relative paths (git status) from any subdir, no git call.
+  local tcwd = ide_term_buf_cwd(vim.api.nvim_get_current_buf())
+  if tcwd then
+    push_ancestors(tcwd)
+  end
+  push_ancestors(vim.fn.getcwd())
+  local names = { fname }
+  local stripped = fname:gsub('^[ab]/', '') -- git diff a/ b/ prefixes
+  if stripped ~= fname then
+    names[#names + 1] = stripped
+  end
+  for _, d in ipairs(dirs) do
+    for _, n in ipairs(names) do
+      local p = (n:sub(1, 1) == '/') and n or (d .. '/' .. n)
+      if test(p) then
+        return p
+      end
+    end
+  end
+  if fname:sub(1, 1) == '~' then
+    local p = vim.fn.expand(fname)
+    if test(p) then
+      return p
+    end
+  end
+  return nil
+end
+
+-- Cursor-style terminal links: open the file under the cursor in the middle
+-- editor (with :line jumps). Falls back to word selection like a terminal.
+--
+-- Terminal panels are narrow, so long paths WRAP across buffer rows. Join
+-- visually-wrapped fragments first (never across real entries/whitespace).
+local function ide_is_entry_start(s)
+  return s:match('^ ?[ MADRCU?!][ MADRCU?!] %S') ~= nil
+end
+
+-- A row joins across only if it carries no prompt/command markers:
+-- wrapped path fragments have no spaces at all (the head row may
+-- still carry its ` M `/`?? ` status prefix).
+local function ide_join_up(prev)
+  if prev == '' or prev:sub(-1) == ' ' then
+    return false
+  end
+  if not prev:find(' ', 1, true) then
+    return true
+  end
+  return ide_is_entry_start(prev)
+end
+
+local function ide_join_down(nxt)
+  if nxt == '' or nxt:sub(1, 1) == ' ' then
+    return false
+  end
+  if ide_is_entry_start(nxt) then
+    return false
+  end
+  if nxt:match('^[%$#>%%]') then
+    return false -- shell prompt on the next row
+  end
+  return not nxt:find(' ', 1, true)
+end
+
+local function ide_join_wrapped_lines(buf, row, c1)
+  local last = vim.api.nvim_buf_line_count(buf)
+  local function get(r)
+    return vim.api.nvim_buf_get_lines(buf, r - 1, r, false)[1] or ''
+  end
+  local text = get(row)
+  local top, joins = row, 0
+  while joins < 3 and top > 1 and text:sub(1, 1) ~= '' and text:sub(1, 1) ~= ' ' do
+    local prev = get(top - 1)
+    if not ide_join_up(prev) then
+      break
+    end
+    c1 = #prev + c1
+    text = prev .. text
+    top = top - 1
+    joins = joins + 1
+  end
+  local bot = row
+  joins = 0
+  while joins < 3 and bot < last and text:sub(-1) ~= '' and text:sub(-1) ~= ' ' do
+    local nxt = get(bot + 1)
+    if not ide_join_down(nxt) then
+      break
+    end
+    text = text .. nxt
+    bot = bot + 1
+    joins = joins + 1
+  end
+  return text, c1
+end
+
+function _G.IdeTermOpenPath()
+  if vim.bo.buftype ~= 'terminal' then
+    return
+  end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local text, c1 = ide_join_wrapped_lines(vim.api.nvim_get_current_buf(), row, col + 1)
+  -- Candidate names, best first: path:line span, isfname word (punctuation
+  -- aware), whitespace word (wrapped fragments). First resolvable wins.
+  local cands = {}
+  for _, pat in ipairs { '()([%w%._%/%-+~]+%.[%w]+):(%d+)()', '()([%w%._%/%-+~]+):(%d+)()' } do
+    for s, p, l, e in text:gmatch(pat) do
+      if s <= c1 and c1 <= e then
+        cands[#cands + 1] = { p, tonumber(l) }
+        break
+      end
+    end
+    if #cands > 0 then
+      break
+    end
+  end
+  local cf = vim.fn.expand '<cfile>'
+  if cf ~= '' then
+    cands[#cands + 1] = { cf, nil }
+  end
+  if text:sub(c1, c1):match('%S') then
+    local s, e = c1, c1
+    while s > 1 and text:sub(s - 1, s - 1):match('%S') do
+      s = s - 1
+    end
+    while e < #text and text:sub(e + 1, e + 1):match('%S') do
+      e = e + 1
+    end
+    local w = text:sub(s, e)
+    if w ~= '' and w ~= cf then
+      cands[#cands + 1] = { w, nil }
+    end
+  end
+  for _, cand in ipairs(cands) do
+    local path = ide_resolve_term_path(cand[1])
+    if path then
+      local win = _G.IdeEditorWin()
+      if not win then
+        vim.cmd 'vsplit'
+        win = vim.api.nvim_get_current_win()
+      end
+      vim.api.nvim_set_current_win(win)
+      vim.cmd('edit ' .. vim.fn.fnameescape(path))
+      if cand[2] then
+        pcall(vim.api.nvim_win_set_cursor, 0, { cand[2], 0 })
+      end
+      return
+    end
+    -- Directories (git status `docs/`) reveal in the file tree instead.
+    local dir = ide_resolve_term_path(cand[1], function(p)
+      return vim.fn.isdirectory(p) == 1
+    end)
+    if dir then
+      local ok, nt = pcall(require, 'neo-tree.command')
+      if ok then
+        pcall(nt.execute, { action = 'focus', source = 'filesystem', position = 'left', reveal_file = dir })
+      end
+      return
+    end
+  end
+  vim.cmd 'normal! viw' -- not a path: select word like a terminal would
+end
+
+-- Terminal mouse: right-click opens the IDE menu (splits live here;
+-- without this, right-click shows nvim's default menu), double-click
+-- a path to open it in the editor (Cursor terminal links; the t-mode
+-- mapping exits to normal first, sequentially).
 vim.api.nvim_create_autocmd('TermOpen', {
-  desc = 'Right-click menu inside terminals',
+  desc = 'Terminal mouse: right-click menu, double-click paths',
   callback = function(ev)
     vim.keymap.set({ 'n', 't' }, '<RightMouse>', function()
       vim.cmd 'popup PopUp'
     end, { buffer = ev.buf, desc = 'Panel menu (right-click)' })
+    vim.keymap.set('n', '<2-LeftMouse>', '<Cmd>lua IdeTermOpenPath()<CR>', { buffer = ev.buf, desc = 'Open path under cursor' })
+    vim.keymap.set('t', '<2-LeftMouse>', '<C-\\><C-n><Cmd>lua IdeTermOpenPath()<CR>', { buffer = ev.buf, desc = 'Open path under cursor' })
+    vim.keymap.set('n', '<CR>', '<Cmd>lua IdeTermOpenPath()<CR>', { buffer = ev.buf, desc = 'Open path under cursor (Enter)' })
   end,
 })
 
@@ -647,8 +867,11 @@ vim.api.nvim_create_autocmd({ 'BufEnter', 'WinEnter' }, {
 -- Cursor Cmd+W: close the current file (layout kept; tree/terminal just hide).
 -- NOTE: this takes over the <C-w> window prefix; navigate with <C-h/j/k/l> + mouse instead.
 local function close_file_smart()
-  if vim.bo.filetype == 'NvimTree' then
-    pcall(vim.cmd, 'NvimTreeClose')
+  if vim.bo.filetype == 'neo-tree' then
+    local ok, nt = pcall(require, 'neo-tree.command')
+    if ok then
+      pcall(nt.execute, { action = 'close' })
+    end
     return
   end
   if vim.bo.buftype == 'terminal' then
@@ -661,7 +884,7 @@ local function close_file_smart()
   local cur = vim.api.nvim_get_current_buf()
   local candidates = {}
   for _, info in ipairs(vim.fn.getbufinfo { buflisted = 1 }) do
-    if info.bufnr ~= cur and vim.bo[info.bufnr].buftype == '' and vim.bo[info.bufnr].filetype ~= 'NvimTree' then
+    if info.bufnr ~= cur and vim.bo[info.bufnr].buftype == '' and vim.bo[info.bufnr].filetype ~= 'neo-tree' then
       candidates[#candidates + 1] = info
     end
   end
@@ -695,9 +918,9 @@ end, { desc = 'Toggle right terminal' })
 vim.api.nvim_create_user_command('IdeExplorerLeft', function()
   toggle_explorer_left()
 end, { desc = 'Toggle left explorer' })
-vim.api.nvim_create_user_command('IdeTermNew', function()
-  ide_term_new()
-end, { desc = 'New terminal tab' })
+vim.api.nvim_create_user_command('IdeTermNew', function(o)
+  ide_term_new(o.args ~= '' and o.args or nil)
+end, { nargs = '?', complete = 'dir', desc = 'New terminal tab (optional start dir)' })
 vim.api.nvim_create_user_command('IdeTermNext', function()
   ide_term_next()
 end, { desc = 'Next terminal tab' })
@@ -737,49 +960,174 @@ vim.cmd [[
 ]]
 
 -- Cursor-style tree context menu (right-click a file/folder in the explorer).
--- nvim-tree is required lazily inside each command, so this is safe pre-install.
+-- neo-tree is required lazily inside each command, so this is safe pre-install.
+local function nt_state()
+  local ok, manager = pcall(require, 'neo-tree.sources.manager')
+  if not ok then
+    return nil
+  end
+  local ok2, state = pcall(manager.get_state, 'filesystem')
+  if ok2 then
+    return state
+  end
+  return nil
+end
+local function nt_node()
+  local state = nt_state()
+  if not state then
+    return nil
+  end
+  local ok, node = pcall(function()
+    return state.tree:get_node()
+  end)
+  if ok then
+    return node
+  end
+  return nil
+end
+local function nt_path(node)
+  if not node then
+    return nil
+  end
+  local ok, id = pcall(function()
+    return node:get_id()
+  end)
+  if ok and type(id) == 'string' and id ~= '' then
+    return id
+  end
+  return nil
+end
+local function nt_cmd(name)
+  local state = nt_state()
+  if not state then
+    return
+  end
+  local ok, cmds = pcall(require, 'neo-tree.sources.filesystem.commands')
+  if ok and type(cmds[name]) == 'function' then
+    pcall(cmds[name], state)
+  end
+end
 vim.api.nvim_create_user_command('TreeCreate', function()
-  require('nvim-tree.api').fs.create()
+  nt_cmd 'add'
 end, { desc = 'Tree: new file/folder (trailing / = folder)' })
 vim.api.nvim_create_user_command('TreeRename', function()
-  require('nvim-tree.api').fs.rename_basename()
+  nt_cmd 'rename_basename'
 end, { desc = 'Tree: rename' })
 vim.api.nvim_create_user_command('TreeDelete', function()
-  require('nvim-tree.api').fs.remove()
+  nt_cmd 'delete'
 end, { desc = 'Tree: delete (confirms)' })
 vim.api.nvim_create_user_command('TreeCut', function()
-  require('nvim-tree.api').fs.cut()
+  nt_cmd 'cut_to_clipboard'
 end, { desc = 'Tree: cut' })
 vim.api.nvim_create_user_command('TreeCopy', function()
-  require('nvim-tree.api').fs.copy.node()
+  nt_cmd 'copy_to_clipboard'
 end, { desc = 'Tree: copy' })
 vim.api.nvim_create_user_command('TreePaste', function()
-  require('nvim-tree.api').fs.paste()
+  nt_cmd 'paste_from_clipboard'
 end, { desc = 'Tree: paste here' })
 vim.api.nvim_create_user_command('TreeCopyRelPath', function()
-  local node = require('nvim-tree.api').tree.get_node_under_cursor()
-  if node then
-    vim.fn.setreg('+', vim.fn.fnamemodify(node.absolute_path, ':.'))
+  local path = nt_path(nt_node())
+  if path then
+    vim.fn.setreg('+', vim.fn.fnamemodify(path, ':.'))
   end
 end, { desc = 'Tree: copy relative path' })
 vim.api.nvim_create_user_command('TreeCopyAbsPath', function()
-  local node = require('nvim-tree.api').tree.get_node_under_cursor()
-  if node then
-    vim.fn.setreg('+', node.absolute_path)
+  local path = nt_path(nt_node())
+  if path then
+    vim.fn.setreg('+', path)
   end
 end, { desc = 'Tree: copy absolute path' })
+vim.api.nvim_create_user_command('TreeCopyName', function()
+  local node = nt_node()
+  if node then
+    vim.fn.setreg('+', node.name)
+  end
+end, { desc = 'Tree: copy file name' })
+vim.api.nvim_create_user_command('TreeOpenSide', function()
+  local node = nt_node()
+  if not node then
+    return
+  end
+  if node.type == 'directory' then
+    nt_cmd 'toggle_node'
+    return
+  end
+  local path = nt_path(node)
+  if not path then
+    return
+  end
+  local win = _G.IdeEditorWin()
+  if not win then
+    vim.cmd 'vsplit'
+    win = vim.api.nvim_get_current_win()
+  end
+  vim.api.nvim_set_current_win(win)
+  vim.cmd 'vsplit'
+  vim.cmd('edit ' .. vim.fn.fnameescape(path))
+end, { desc = 'Tree: open file in a side split' })
+vim.api.nvim_create_user_command('TreeReveal', function()
+  local path = nt_path(nt_node())
+  if not path then
+    return
+  end
+  if vim.fn.isdirectory(path) == 0 then
+    path = vim.fn.fnamemodify(path, ':h')
+  end
+  vim.ui.open(path)
+end, { desc = 'Tree: reveal in Finder/File Explorer' })
+vim.api.nvim_create_user_command('TreeTermHere', function()
+  local path = nt_path(nt_node())
+  local dir = vim.fn.getcwd()
+  if path then
+    if vim.fn.isdirectory(path) == 1 then
+      dir = path
+    else
+      dir = vim.fn.fnamemodify(path, ':h')
+    end
+  end
+  vim.cmd('IdeTermNew ' .. vim.fn.fnameescape(dir))
+end, { desc = 'Tree: open terminal here' })
+vim.api.nvim_create_user_command('TreeExpandAll', function()
+  nt_cmd 'expand_all_nodes'
+end, { desc = 'Tree: expand all folders' })
+vim.api.nvim_create_user_command('TreeCollapseAll', function()
+  nt_cmd 'close_all_nodes'
+end, { desc = 'Tree: collapse all folders' })
+vim.api.nvim_create_user_command('TreeRefresh', function()
+  nt_cmd 'refresh'
+end, { desc = 'Tree: refresh' })
 vim.cmd [[
   anoremenu TreePopUp.New\ File/Folder… :TreeCreate<CR>
-  anoremenu TreePopUp.Rename… :TreeRename<CR>
-  anoremenu TreePopUp.Delete :TreeDelete<CR>
+  anoremenu TreePopUp.Open\ to\ the\ Side :TreeOpenSide<CR>
+  anoremenu TreePopUp.Reveal\ in\ Finder :TreeReveal<CR>
+  anoremenu TreePopUp.Open\ Terminal\ Here :TreeTermHere<CR>
   anoremenu TreePopUp.-sep1- <Nop>
   anoremenu TreePopUp.Cut :TreeCut<CR>
   anoremenu TreePopUp.Copy :TreeCopy<CR>
   anoremenu TreePopUp.Paste :TreePaste<CR>
+  anoremenu TreePopUp.Rename… :TreeRename<CR>
+  anoremenu TreePopUp.Delete :TreeDelete<CR>
   anoremenu TreePopUp.-sep2- <Nop>
+  anoremenu TreePopUp.Copy\ Name :TreeCopyName<CR>
   anoremenu TreePopUp.Copy\ Relative\ Path :TreeCopyRelPath<CR>
   anoremenu TreePopUp.Copy\ Absolute\ Path :TreeCopyAbsPath<CR>
+  anoremenu TreePopUp.-sep3- <Nop>
+  anoremenu TreePopUp.Expand\ All :TreeExpandAll<CR>
+  anoremenu TreePopUp.Collapse\ All :TreeCollapseAll<CR>
+  anoremenu TreePopUp.Refresh :TreeRefresh<CR>
 ]]
+
+-- The explorer is a panel, not a text buffer: no listchars, no wrapping.
+-- (neo-tree itself sets nomodifiable/nofile; full-row highlight comes from
+-- its `indent` expander + cursorline, configured in custom/plugins/init.lua.)
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'neo-tree',
+  desc = 'Panel (not text) display for the file tree',
+  callback = function()
+    vim.opt_local.list = false
+    vim.opt_local.wrap = false
+  end,
+})
 
 -- Cursor gutter peek: single-click a changed line's gutter sign to open a
 -- focused diff popup with revert / stage / navigate actions.
@@ -877,7 +1225,7 @@ vim.keymap.set('n', '<LeftRelease>', function()
   if m.wincol > sign_end or (click_press.wincol or 99) > sign_end then
     return -- text/number area: ignore
   end
-  if vim.bo[buf].buftype ~= '' or vim.bo[buf].filetype == 'NvimTree' then
+  if vim.bo[buf].buftype ~= '' or vim.bo[buf].filetype == 'neo-tree' then
     return
   end
   if line_in_hunk(buf, m.line) then
@@ -926,12 +1274,38 @@ local function ide_state_key()
   return ide_key_cache[cwd]
 end
 
+-- Live cwd of a terminal's shell (macOS lsof). Fresh shells inherit nvim's
+-- cwd, but users cd constantly -- only the live lookup is truthful.
+ide_term_buf_cwd = function(buf)
+  local ok, job = pcall(vim.api.nvim_buf_get_var, buf, 'terminal_job_id')
+  if not ok or type(job) ~= 'number' then
+    return nil
+  end
+  local ok2, pid = pcall(vim.fn.jobpid, job)
+  if not ok2 or type(pid) ~= 'number' or pid <= 0 then
+    return nil
+  end
+  local ok3, out = pcall(vim.fn.systemlist, 'lsof -a -d cwd -p ' .. pid .. ' -F n 2>/dev/null')
+  if not ok3 or type(out) ~= 'table' then
+    return nil
+  end
+  for _, line in ipairs(out) do
+    if line:sub(1, 1) == 'n' then
+      local dir = line:sub(2)
+      if dir ~= '' and vim.fn.isdirectory(dir) == 1 then
+        return dir
+      end
+    end
+  end
+  return nil
+end
+
 local function ide_save_files(allow_delete)
   local state = ide_read_state()
   local cwd = ide_state_key()
   local files = {}
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.fn.buflisted(b) == 1 and vim.bo[b].buftype == '' and vim.bo[b].filetype ~= 'NvimTree' then
+    if vim.fn.buflisted(b) == 1 and vim.bo[b].buftype == '' and vim.bo[b].filetype ~= 'neo-tree' then
       local name = vim.api.nvim_buf_get_name(b)
       if name ~= '' and vim.fn.filereadable(name) == 1 then
         files[#files + 1] = name
@@ -941,14 +1315,56 @@ local function ide_save_files(allow_delete)
       end
     end
   end
-  if #files == 0 then
+  local terms = {}
+  for _, t in ipairs(ide_terms) do
+    if vim.api.nvim_buf_is_valid(t.buf) and #terms < 10 then
+      terms[#terms + 1] = ide_term_buf_cwd(t.buf) or vim.fn.getcwd()
+    end
+  end
+  -- Chrome sizes: tree width + terminal panel size/dir (non-floating only).
+  -- Missing windows keep their previous saved sizes (e.g. tree was toggled
+  -- off); locals stay live so reopening in-session keeps resized sizes.
+  local tree_width = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_config(w).relative == '' and vim.bo[vim.api.nvim_win_get_buf(w)].filetype == 'neo-tree' then
+      tree_width = vim.api.nvim_win_get_width(w)
+      break
+    end
+  end
+  local panel = ide_term_panel_win()
+  local termsize = { dir = ide_term_dir, width = ide_term_width, height = ide_term_height }
+  if panel and vim.api.nvim_win_get_config(panel).relative == '' then
+    if ide_term_dir == 'vertical' then
+      termsize.width = vim.api.nvim_win_get_width(panel)
+    else
+      termsize.height = vim.api.nvim_win_get_height(panel)
+    end
+    ide_term_width, ide_term_height = termsize.width, termsize.height
+  end
+  if #files == 0 and #terms == 0 then
     if not allow_delete then
       return -- don't wipe good state on transient empty moments (startup)
     end
-    state[cwd] = nil -- all closed: reopen to blank, not stale files
+    state[cwd] = nil -- everything closed: reopen to blank, not stale
   else
-    local cur = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-    state[cwd] = { files = files, active = cur, cursor = { vim.fn.line '.', vim.fn.col '.' } }
+    -- Active/cursor only when quitting from a real file (not the terminal:
+    -- term:// paths can never be re-focused on restore).
+    local cur_buf = vim.api.nvim_get_current_buf()
+    local cur_name = vim.api.nvim_buf_get_name(cur_buf)
+    local active, cursor = '', { 1, 1 }
+    if vim.bo[cur_buf].buftype == '' and cur_name ~= '' and vim.fn.filereadable(cur_name) == 1 then
+      active = cur_name
+      cursor = { vim.fn.line '.', vim.fn.col '.' }
+    end
+    local prev = type(state[cwd]) == 'table' and state[cwd] or {}
+    state[cwd] = {
+      files = files,
+      active = active,
+      cursor = cursor,
+      terms = terms,
+      tree_width = tree_width or prev.tree_width,
+      termsize = (panel and termsize or prev.termsize) or termsize,
+    }
   end
   pcall(vim.fn.writefile, { vim.json.encode(state) }, ide_state_path())
 end
@@ -959,43 +1375,96 @@ local function ide_restore_files()
     return false
   end
   local state = ide_read_state()[ide_state_key()]
-  if type(state) ~= 'table' or type(state.files) ~= 'table' or #state.files == 0 then
+  if type(state) ~= 'table' then
     return false
   end
+  -- Chrome sizes first: new panels open at the saved size, tree/panel are
+  -- reapplied exactly at the end (splits rebalance as windows open).
+  if type(state.termsize) == 'table' then
+    if state.termsize.dir == 'vertical' or state.termsize.dir == 'horizontal' then
+      ide_term_dir = state.termsize.dir
+    end
+    if type(state.termsize.width) == 'number' then
+      ide_term_width = math.min(math.max(state.termsize.width, 20), math.max(vim.o.columns - 40, 30))
+    end
+    if type(state.termsize.height) == 'number' then
+      ide_term_height = math.min(math.max(state.termsize.height, 5), math.max(vim.o.lines - 10, 10))
+    end
+  end
   vim.g.ide_restoring = true -- pause BufEnter saves until done
-  local opened = false
-  for _, path in ipairs(state.files) do
-    if vim.fn.filereadable(path) == 1 then
-      if not opened then
-        vim.cmd('edit ' .. vim.fn.fnameescape(path))
-        opened = true
-      else
-        vim.cmd('badd ' .. vim.fn.fnameescape(path))
+  local did = false
+  if type(state.files) == 'table' and #state.files > 0 then
+    local opened = false
+    for _, path in ipairs(state.files) do
+      if vim.fn.filereadable(path) == 1 then
+        if not opened then
+          vim.cmd('edit ' .. vim.fn.fnameescape(path))
+          opened = true
+        else
+          vim.cmd('badd ' .. vim.fn.fnameescape(path))
+        end
+      end
+    end
+    if opened then
+      did = true
+      if type(state.active) == 'string' and state.active ~= '' then
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_get_name(b) == state.active then
+            vim.api.nvim_set_current_buf(b)
+            if type(state.cursor) == 'table' then
+              pcall(vim.api.nvim_win_set_cursor, 0, { state.cursor[1] or 1, (state.cursor[2] or 1) - 1 })
+              vim.cmd 'normal! zz'
+            end
+            break
+          end
+        end
       end
     end
   end
-  if not opened then
-    vim.g.ide_restoring = false
-    return false
+  -- Terminal tabs: fresh shells in the saved cwds (live ptys can't persist).
+  if type(state.terms) == 'table' and #state.terms > 0 then
+    for _, w in ipairs(ide_term_panel_wins()) do
+      pcall(vim.api.nvim_win_close, w, false)
+    end
+    for _, t in ipairs(ide_terms) do
+      pcall(vim.api.nvim_buf_delete, t.buf, { force = true })
+    end
+    ide_terms = {}
+    ide_term_idx = 0
+    for _, c in ipairs(state.terms) do
+      if type(c) == 'string' and vim.fn.isdirectory(c) == 1 then
+        ide_term_new(c)
+      end
+    end
+    if #ide_terms == 0 then
+      ide_term_new()
+    end
+    did = true
   end
-  if type(state.active) == 'string' and state.active ~= '' then
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_get_name(b) == state.active then
-        vim.api.nvim_set_current_buf(b)
-        if type(state.cursor) == 'table' then
-          pcall(vim.api.nvim_win_set_cursor, 0, { state.cursor[1] or 1, (state.cursor[2] or 1) - 1 })
-          vim.cmd 'normal! zz'
-        end
+  -- Reapply chrome sizes last, exactly as left (splits rebalanced above).
+  if type(state.tree_width) == 'number' then
+    local w = math.min(math.max(state.tree_width, 15), math.max(math.floor(vim.o.columns / 2), 20))
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_config(win).relative == '' and vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'neo-tree' then
+        pcall(vim.api.nvim_win_set_width, win, w)
         break
       end
     end
   end
+  local panel = ide_term_panel_win()
+  if panel then
+    if ide_term_dir == 'vertical' then
+      pcall(vim.api.nvim_win_set_width, panel, ide_term_width)
+    else
+      pcall(vim.api.nvim_win_set_height, panel, ide_term_height)
+    end
+  end
   vim.g.ide_restoring = false
-  return true
+  return did
 end
 
-vim.api.nvim_create_autocmd({ 'VimLeavePre', 'FocusLost', 'BufEnter' }, {
-  desc = 'Remember open files for next launch',
+vim.api.nvim_create_autocmd({ 'VimLeavePre', 'FocusLost', 'BufEnter', 'WinResized' }, {
+  desc = 'Remember open files and window sizes for next launch',
   callback = function(ev)
     if vim.g.ide_restoring then
       return
@@ -1031,7 +1500,7 @@ vim.api.nvim_create_user_command('IdeTerms', function()
 end, { desc = 'Show terminal panel state (debug)' })
 
 if vim.env.NVIM_IDE_TEST then
-  _G.IdeTest = { save = ide_save_files, restore = ide_restore_files }
+  _G.IdeTest = { save = ide_save_files, restore = ide_restore_files, term_cwd = ide_term_buf_cwd }
 end
 
 -- Auto-open the full IDE layout (tree left, terminal right) for a bare
@@ -1041,8 +1510,8 @@ vim.api.nvim_create_autocmd('VimEnter', {
   desc = 'Auto-open IDE layout except for explicit file launches',
   nested = true,
   callback = function()
-    -- Skip only for explicit file launches. (nvim-tree's directory hijack
-    -- rewrites argv[0] to NvimTree_1, so argv can't detect `nvim .`.)
+    -- Skip only for explicit file launches. (neo-tree's directory hijack
+    -- opens the tree itself for `nvim .`, so argv can't detect it.)
     for i = 0, vim.fn.argc() - 1 do
       local a = vim.fn.argv(i)
       if a == '-' or (vim.fn.filereadable(a) == 1 and vim.fn.isdirectory(a) == 0) then
@@ -1056,39 +1525,90 @@ vim.api.nvim_create_autocmd('VimEnter', {
         pcall(vim.api.nvim_buf_delete, b, { force = true })
       end
     end
+    -- Pause workspace saves until launch settles: intermediate buffers
+    -- (tree, fresh terminal) must never overwrite the saved state that
+    -- restore is about to read.
+    vim.g.ide_restoring = true
     local function editor_win()
       for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_config(w).relative == '' then
           local b = vim.api.nvim_win_get_buf(w)
-          if vim.bo[b].buftype == '' and vim.bo[b].filetype ~= 'NvimTree' and not vim.w[w].ide_term_panel then
+          if vim.bo[b].buftype == '' and vim.bo[b].filetype ~= 'neo-tree' and not vim.w[w].ide_term_panel then
             return w
           end
         end
       end
       return nil
     end
-    if not pcall(vim.cmd, 'NvimTreeOpen') then
-      vim.notify('nvim-tree not installed: run :Lazy sync and restart', vim.log.levels.WARN)
+    local ok_nt, nt_cmd = pcall(require, 'neo-tree.command')
+    if ok_nt then
+      pcall(nt_cmd.execute, { action = 'show', source = 'filesystem', position = 'left' })
+    else
+      vim.notify('neo-tree not installed: run :Lazy sync and restart', vim.log.levels.WARN)
     end
     if not editor_win() then
       -- nvim <dir> leaves only the tree: open a blank editor beside it.
       for _, w in ipairs(vim.api.nvim_list_wins()) do
-        if vim.bo[vim.api.nvim_win_get_buf(w)].filetype == 'NvimTree' then
+        if vim.bo[vim.api.nvim_win_get_buf(w)].filetype == 'neo-tree' then
           vim.api.nvim_set_current_win(w)
           break
         end
       end
       vim.cmd 'rightbelow vsplit'
       vim.cmd 'enew'
-      pcall(vim.cmd, 'NvimTreeResize 30')
     end
     toggle_terminal_right()
     vim.cmd 'stopinsert'
     local mid = editor_win()
     if mid then
-      vim.api.nvim_set_current_win(mid) -- leave focus in the middle, like Cursor
+      vim.api.nvim_set_current_win(mid) -- files restore into the middle
     end
     ide_restore_files() -- reopen last session's files (blank editor only)
+    mid = editor_win()
+    if mid then
+      vim.api.nvim_set_current_win(mid) -- leave focus in the middle, like Cursor
+    end
+    vim.g.ide_restoring = false
+  end,
+})
+
+-- Cursor layout guarantee: the middle editor can never vanish. If its last
+-- window closes while tree/panel remain (e.g. :q on the last file), reopen
+-- a blank middle instead of letting the terminal take the whole screen.
+vim.api.nvim_create_autocmd('WinClosed', {
+  pattern = '*',
+  desc = 'Reopen blank editor if it was the last one (keep layout)',
+  callback = function()
+    if vim.v.dying ~= 0 then
+      return
+    end
+    vim.schedule(function()
+      if vim.v.dying ~= 0 then
+        return
+      end
+      if _G.IdeEditorWin() then
+        return
+      end
+      local anchor = nil
+      for _, w in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(w)
+        if vim.bo[b].filetype == 'neo-tree' or vim.w[w].ide_term_panel then
+          anchor = w
+          break
+        end
+      end
+      if not anchor then
+        return -- nothing IDE-like left; quit/shrink normally
+      end
+      vim.api.nvim_set_current_win(anchor)
+      if vim.bo[vim.api.nvim_win_get_buf(anchor)].filetype == 'neo-tree' then
+        vim.cmd 'rightbelow vsplit'
+        vim.cmd 'enew'
+      else
+        vim.cmd 'topleft vsplit'
+        vim.cmd 'enew'
+      end
+    end)
   end,
 })
 
@@ -1132,6 +1652,38 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
   callback = function()
     vim.hl.on_yank()
+  end,
+})
+
+-- Never block the IDE on swap files. Respawns/restarts can leave stale
+-- swaps behind; without this every :edit of such a file stops on E325.
+vim.api.nvim_create_autocmd('SwapExists', {
+  desc = 'Auto-resolve swap files instead of prompting (E325)',
+  callback = function()
+    local swap = vim.v.swapname
+    local fname = vim.fn.expand '<afile>:p'
+    local pid = nil
+    local ok, info = pcall(vim.fn.swapinfo, swap)
+    if ok and type(info) == 'table' then
+      pid = tonumber(info.pid)
+    end
+    local dead = true
+    if pid and pid > 0 then
+      local uv = vim.uv or vim.loop
+      dead = not pcall(uv.kill, pid, 0) -- signal 0: exists check only
+    end
+    if dead and vim.fn.getftime(fname) >= vim.fn.getftime(swap) then
+      vim.v.swapchoice = 'd' -- stale, nothing newer in it: delete + open
+    else
+      vim.v.swapchoice = 'e' -- live session or possible unsaved work: open anyway
+      vim.schedule(function()
+        if not dead then
+          vim.notify('File also open in nvim pid ' .. pid .. ': editing anyway', vim.log.levels.WARN)
+        else
+          vim.notify('Stale swap kept (may hold unsaved work): ' .. swap, vim.log.levels.WARN)
+        end
+      end)
+    end
   end,
 })
 
@@ -1286,7 +1838,15 @@ require('lazy').setup({
     opts = {
       -- delay between pressing a key and opening which-key (milliseconds)
       -- this setting is independent of vim.o.timeoutlen
-      delay = 0,
+      -- 300 (not 0): instant popups ambush trackpad/mouse users in the file
+      -- tree, where every letter is a mapping and any micro-drag enters visual.
+      delay = 300,
+      -- Never auto-show the popup on entering visual mode (a trackpad
+      -- micro-drag does that constantly); show it on the first keypress
+      -- instead. Prefix keys in normal mode still use `delay` above.
+      defer = function()
+        return true
+      end,
       icons = {
         -- set icon mappings to true if you have a Nerd Font
         mappings = vim.g.have_nerd_font,
@@ -1915,12 +2475,12 @@ require('lazy').setup({
       vim.api.nvim_set_hl(0, 'SatelliteGitSignsChange', { link = 'GitSignsChange' })
       vim.api.nvim_set_hl(0, 'SatelliteGitSignsDelete', { link = 'GitSignsDelete' })
       vim.api.nvim_set_hl(0, 'GitSignsCurrentLineBlame', { fg = '#565f89', italic = true })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitNew', { fg = '#9ece6a' })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitDirty', { fg = '#e0af68' })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitDeleted', { fg = '#f7768e' })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitStaged', { fg = '#5f9ea0' })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitMerge', { fg = '#bb9af7' })
-      vim.api.nvim_set_hl(0, 'NvimTreeGitRenamed', { fg = '#bb9af7' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitAdded', { fg = '#9ece6a' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitModified', { fg = '#e0af68' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitDeleted', { fg = '#f7768e' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitUntracked', { fg = '#7aa2f7' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitRenamed', { fg = '#bb9af7' })
+      vim.api.nvim_set_hl(0, 'NeoTreeGitStaged', { fg = '#5f9ea0' })
     end,
   },
 
@@ -1977,7 +2537,9 @@ require('lazy').setup({
     main = 'nvim-treesitter.configs', -- Sets main module to use for opts
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      -- Pre-installed so opening these never triggers an on-demand
+      -- download popup (seen fail once for typescript).
+      ensure_installed = { 'bash', 'c', 'diff', 'html', 'javascript', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'tsx', 'typescript', 'vim', 'vimdoc' },
       -- Autoinstall languages that are not installed
       auto_install = true,
       highlight = {
