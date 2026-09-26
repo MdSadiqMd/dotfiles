@@ -1,3 +1,11 @@
+# ASCII BOAT SHELL INTEGRATION START boat
+case ":$PATH:" in
+  *":/Users/sadiq/.ascii/bin:"*) ;;
+  *) PATH="/Users/sadiq/.ascii/bin:$PATH" ;;
+esac
+export PATH
+# ASCII BOAT SHELL INTEGRATION END boat
+
 # Ensure Nix profile bins come first
 if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
   . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
@@ -207,5 +215,49 @@ export PATH="$PATH:/Applications/Tailscale.app/Contents/MacOS/Tailscale status"
 
 
 
+
+
+# ponytail: tmux is RAM-only, so reboot wipes sessions; recreate lazily on first
+# shell (continuum auto-restore runs on server start when a save exists, script
+# is idempotent fallback). Upgrade to a launchd agent if you need sessions
+# before opening any terminal.
+if command -v tmux >/dev/null 2>&1 && [[ -z "$TMUX" ]]; then
+  { tmux has-session -t todo 2>/dev/null || tmux has-session -t dognosis 2>/dev/null || /Users/sadiq/.config/nix/tmux-sessions.sh >/dev/null 2>&1; } &!
+fi
+
+# ASCII BOAT SHELL INTEGRATION START boat
+boat() {
+  current_file=$(mktemp)
+  convo_file=$(mktemp)
+  old_current_file=${BOAT_CURRENT_ID_FILE-}
+  old_convo_file=${BOAT_CURRENT_CONVO_FILE-}
+  export BOAT_CURRENT_ID_FILE="$current_file"
+  export BOAT_CURRENT_CONVO_FILE="$convo_file"
+  command "/Users/sadiq/.ascii/bin/boat" "$@"
+  boat_status=$?
+  if [ "$boat_status" -eq 0 ]; then
+    case "${1:-}" in
+      new|start|fork)
+        if [ -s "$current_file" ]; then
+          current_id=$(tr -d '[:space:]' < "$current_file")
+          if [ -n "$current_id" ]; then export BOAT_CURRENT_ID="$current_id"; fi
+        fi
+        ;;
+    esac
+    case "${1:-}" in
+      prompt)
+        if [ -s "$convo_file" ]; then
+          IFS= read -r current_convo < "$convo_file" || current_convo=""
+          if [ -n "$current_convo" ]; then export BOAT_CURRENT_CONVO="$current_convo"; fi
+        fi
+        ;;
+    esac
+  fi
+  if [ -n "$old_current_file" ]; then export BOAT_CURRENT_ID_FILE="$old_current_file"; else unset BOAT_CURRENT_ID_FILE; fi
+  if [ -n "$old_convo_file" ]; then export BOAT_CURRENT_CONVO_FILE="$old_convo_file"; else unset BOAT_CURRENT_CONVO_FILE; fi
+  rm -f "$current_file" "$convo_file"
+  return "$boat_status"
+}
+# ASCII BOAT SHELL INTEGRATION END boat
 
 . "/Users/sadiq/.local/bin/watcher-env"
