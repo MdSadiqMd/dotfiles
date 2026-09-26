@@ -245,6 +245,9 @@
                   xdg.configFile."ghostty/config".source =
                     config.lib.file.mkOutOfStoreSymlink "/Users/sadiq/.config/nix/ghostty-config";
 
+                  xdg.configFile."tmux/tmux.conf".source =
+                    config.lib.file.mkOutOfStoreSymlink "/Users/sadiq/.config/nix/tmux.conf";
+
                   home.activation = {
                     createZshrcSymlink = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
                       if [ ! -L "$HOME/.zshrc" ]; then
