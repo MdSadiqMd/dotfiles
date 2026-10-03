@@ -141,6 +141,7 @@
             ];
             brews = [
               "b2-tools"
+              "blueutil"
               "fzf"
               "zoxide"
               "gnupg"
@@ -156,7 +157,7 @@
               "rtk"
               "just"
             ];
-            onActivation.cleanup = "zap";
+            onActivation.cleanup = "none"; # ponytail: zap disabled — nix-darwin 25.11 passes `brew bundle --cleanup` which brew 7.x removed; re-enable when nix-darwin supports brew 7 (new syntax: `brew bundle install --force-cleanup --zap`)
             onActivation.autoUpdate = true;
             onActivation.upgrade = true;
           };
