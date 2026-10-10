@@ -260,4 +260,6 @@ boat() {
 }
 # ASCII BOAT SHELL INTEGRATION END boat
 
+
+
 . "/Users/sadiq/.local/bin/watcher-env"
