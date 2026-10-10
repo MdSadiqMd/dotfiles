@@ -1,3 +1,5 @@
+be honest
+
 @RTK.md
 
 # Global Rules
