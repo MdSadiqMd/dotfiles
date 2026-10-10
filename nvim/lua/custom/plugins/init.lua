@@ -433,8 +433,45 @@ return {
           group_empty_dirs = true,
           hijack_netrw_behavior = 'open_default',
           filtered_items = { hide_dotfiles = false, hide_gitignored = false },
+          use_libuv_file_watcher = true, -- instant refresh on file changes
         },
       }
+      -- Git badges must follow commits made outside the tree (terminal
+      -- panel, fugitive, lazygit): those touch .git/ only, which neither
+      -- buffer writes nor the file watcher (it skips .git) can see.
+      local git_pending = false
+      local function refresh_git_status()
+        if git_pending then
+          return
+        end
+        git_pending = true
+        vim.defer_fn(function()
+          git_pending = false
+          local visible = false
+          for _, w in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_config(w).relative == '' and vim.bo[vim.api.nvim_win_get_buf(w)].filetype == 'neo-tree' then
+              visible = true
+              break
+            end
+          end
+          if not visible then
+            return
+          end
+          local ok_ev, ev = pcall(require, 'neo-tree.events')
+          if ok_ev and type(ev.fire_event) == 'function' and type(ev.GIT_EVENT) == 'string' then
+            pcall(ev.fire_event, ev.GIT_EVENT)
+          end
+        end, 400)
+      end
+      vim.api.nvim_create_autocmd({ 'FocusGained', 'TermClose', 'TermLeave', 'DirChanged' }, {
+        desc = 'Refresh tree git status after outside git changes',
+        callback = refresh_git_status,
+      })
+      vim.api.nvim_create_autocmd({ 'BufWritePost', 'BufDelete' }, {
+        pattern = { '*COMMIT_EDITMSG*', '*MERGE_MSG*' },
+        desc = 'Refresh tree git status after committing',
+        callback = refresh_git_status,
+      })
     end,
   },
 
