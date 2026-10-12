@@ -1028,19 +1028,26 @@ end, { desc = 'Tree: paste here' })
 vim.api.nvim_create_user_command('TreeCopyRelPath', function()
   local path = nt_path(nt_node())
   if path then
-    vim.fn.setreg('+', vim.fn.fnamemodify(path, ':.'))
+    local rel = vim.fn.fnamemodify(path, ':.')
+    vim.fn.setreg('+', rel)
+    vim.fn.setreg('*', rel)
+    vim.notify('Copied relative path: ' .. rel, vim.log.levels.INFO)
   end
 end, { desc = 'Tree: copy relative path' })
 vim.api.nvim_create_user_command('TreeCopyAbsPath', function()
   local path = nt_path(nt_node())
   if path then
     vim.fn.setreg('+', path)
+    vim.fn.setreg('*', path)
+    vim.notify('Copied path: ' .. path, vim.log.levels.INFO)
   end
 end, { desc = 'Tree: copy absolute path' })
 vim.api.nvim_create_user_command('TreeCopyName', function()
   local node = nt_node()
   if node then
     vim.fn.setreg('+', node.name)
+    vim.fn.setreg('*', node.name)
+    vim.notify('Copied name: ' .. node.name, vim.log.levels.INFO)
   end
 end, { desc = 'Tree: copy file name' })
 vim.api.nvim_create_user_command('TreeOpenSide', function()
@@ -1109,8 +1116,8 @@ vim.cmd [[
   anoremenu TreePopUp.Delete :TreeDelete<CR>
   anoremenu TreePopUp.-sep2- <Nop>
   anoremenu TreePopUp.Copy\ Name :TreeCopyName<CR>
+  anoremenu TreePopUp.Copy\ Path :TreeCopyAbsPath<CR>
   anoremenu TreePopUp.Copy\ Relative\ Path :TreeCopyRelPath<CR>
-  anoremenu TreePopUp.Copy\ Absolute\ Path :TreeCopyAbsPath<CR>
   anoremenu TreePopUp.-sep3- <Nop>
   anoremenu TreePopUp.Expand\ All :TreeExpandAll<CR>
   anoremenu TreePopUp.Collapse\ All :TreeCollapseAll<CR>
