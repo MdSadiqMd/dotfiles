@@ -73,6 +73,7 @@
             lean4
             obsidian
             tmux
+            gh
             git
             go_1_24
             neovim
@@ -241,6 +242,7 @@
 
                   home.packages = with pkgs; [
                     curl
+                    gh
                   ];
 
                   xdg.configFile."ghostty/config".source =
