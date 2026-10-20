@@ -137,6 +137,7 @@
               "ghostty"
               "alt-tab"
               "docker-desktop"
+              "openwhispr"
               "rustdesk"
               "wireshark-app"
             ];
