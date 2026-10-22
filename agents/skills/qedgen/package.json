@@ -1,0 +1,37 @@
+{
+  "name": "qedgen-solana-skills",
+  "version": "2.16.1",
+  "description": "Agent skill for spec-driven verification of Solana programs — .qedspec specs generate proptest harnesses, Kani BMC harnesses, Lean 4 proofs, Anchor and Quasar agent-fill scaffolds, deploy-safety ratchets, and CI workflows.",
+  "keywords": [
+    "agent-skill",
+    "qedgen",
+    "solana",
+    "anchor",
+    "quasar",
+    "formal-verification",
+    "proptest",
+    "kani",
+    "lean4",
+    "ratchet",
+    "rust",
+    "smart-contracts"
+  ],
+  "main": "SKILL.md",
+  "scripts": {
+    "check:versions": "bash scripts/check-version-consistency.sh",
+    "test": "bash scripts/check-version-consistency.sh && ./bin/qedgen --help"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qedgen/solana-skills.git"
+  },
+  "author": "abishekk92",
+  "license": "MIT",
+  "homepage": "https://github.com/qedgen/solana-skills#readme",
+  "agentSkills": {
+    "skills": [
+      "SKILL.md",
+      "skills/qedgen-auditor/SKILL.md"
+    ]
+  }
+}

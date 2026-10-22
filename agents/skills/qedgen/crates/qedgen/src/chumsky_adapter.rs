@@ -1,0 +1,3122 @@
+//! Adapter: typed AST (`ast::Spec`) → legacy `ParsedSpec`.
+//!
+//! Bridge layer that lets downstream consumers (`check.rs`, `lean_gen.rs`,
+//! `kani.rs`, `proptest_gen.rs`, ...) keep reading the string-rendered
+//! `ParsedSpec` while the parser produces a typed AST. Next migration step:
+//! rewrite consumers against the typed AST directly, then delete this module
+//! and `ParsedSpec`'s pre-rendered-string fields.
+//!
+//! Guard expressions are rendered to Lean-form (unicode operators, pre/post
+//! state prefixes) and Rust-form (ASCII) strings here. The typed AST keeps
+//! structure; the string forms are lossy projections for legacy consumers.
+
+use crate::ast::{self as a, Expr, Node, TopItem};
+use crate::check::{
+    FlowKind, ParsedAccountType, ParsedCall, ParsedCallArg, ParsedCover, ParsedEnsures,
+    ParsedEnvironment, ParsedErrorCode, ParsedEvent, ParsedGuard, ParsedHandler,
+    ParsedHandlerAccount, ParsedImport, ParsedInstruction, ParsedInterface, ParsedInterfaceHandler,
+    ParsedLayoutField, ParsedLiveness, ParsedPda, ParsedProperty, ParsedPubkey, ParsedRecordType,
+    ParsedRequires, ParsedSbpfProperty, ParsedSpec, ParsedSumType, ParsedUpstream, ParsedVariant,
+    SbpfPropertyKind,
+};
+
+// ============================================================================
+// Expression rendering (Lean / Rust)
+// ============================================================================
+
+#[derive(Copy, Clone)]
+enum Ctx {
+    /// Inside a handler's `requires` / property body / invariant —
+    /// `state.X` renders with pre-state prefix.
+    Guard,
+    /// Inside an `ensures` clause — `state.X` is post-state `s'`, `old(X)` is pre-state `s`.
+    Ensures,
+}
+
+type ConstTable<'a> = &'a std::collections::BTreeMap<String, String>;
+
+// ----------------------------------------------------------------------------
+// Type inference for mixed Nat/Int arithmetic
+//
+// Lean doesn't implicitly coerce Nat → Int in arithmetic. When a spec writes
+// `state.accounts[i].capital + state.accounts[i].pnl` (U128 + I128 in source),
+// the Lean output must wrap the Nat side as `((x : Nat) : Int)`. We resolve
+// each operand's kind from a shallow type environment built during adapt().
+// ----------------------------------------------------------------------------
+
+/// Lean-level type kind for the purpose of operator coercion. We collapse
+/// all unsigned widths to `Nat` and all signed widths to `Int`; `Pubkey`
+/// and `Bool` propagate through equality tests but don't participate in
+/// arithmetic. `Unknown` is treated as `Nat` for conservatism — the current
+/// codegen already defaults to Nat on unknowns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Nat,
+    Int,
+    Bool,
+    Other,
+}
+
+/// Type environment for expression rendering.
+///   - `state_fields`: bare field name → TypeRef (top-level state fields like V, I)
+///   - `records`: record name → field name → TypeRef (e.g. Account.capital → U128)
+///   - `params`: current handler's params, for bare-ident lookups
+#[derive(Default)]
+struct TypeEnv<'a> {
+    state_fields: std::collections::BTreeMap<String, &'a a::TypeRef>,
+    records: std::collections::BTreeMap<String, std::collections::BTreeMap<String, &'a a::TypeRef>>,
+    params: Vec<(String, &'a a::TypeRef)>,
+}
+
+impl<'a> TypeEnv<'a> {
+    fn from_spec(spec: &'a a::Spec) -> Self {
+        let mut env = TypeEnv::default();
+        for Node { node, .. } in &spec.items {
+            match node {
+                TopItem::Record(r) => {
+                    let m: std::collections::BTreeMap<_, _> =
+                        r.fields.iter().map(|f| (f.name.clone(), &f.ty)).collect();
+                    env.records.insert(r.name.clone(), m);
+                }
+                // State-like ADTs: flatten all variant fields into the
+                // state_fields map (backward-compat with the existing
+                // ParsedSpec shape). The first variant carrying fields
+                // wins for name collisions. `Error`-shaped ADTs are skipped.
+                TopItem::Adt(a) if a.name != "Error" => {
+                    for variant in &a.variants {
+                        for f in &variant.fields {
+                            env.state_fields.entry(f.name.clone()).or_insert(&f.ty);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        env
+    }
+
+    fn with_params(mut self, params: &'a [a::TypedField]) -> Self {
+        self.params = params.iter().map(|f| (f.name.clone(), &f.ty)).collect();
+        self
+    }
+
+    /// Resolve a source-language TypeRef to its Lean `Kind`.
+    fn type_ref_kind(&self, t: &a::TypeRef) -> Kind {
+        match t {
+            a::TypeRef::Named(n) => match n.as_str() {
+                "U8" | "U16" | "U32" | "U64" | "U128" => Kind::Nat,
+                "I8" | "I16" | "I32" | "I64" | "I128" => Kind::Int,
+                "Bool" => Kind::Bool,
+                // Named records / aliases bottom out here.
+                _ => Kind::Other,
+            },
+            a::TypeRef::Map { .. } => Kind::Other,
+            a::TypeRef::Fin { .. } => Kind::Nat, // Fin n coerces to Nat for arithmetic.
+            a::TypeRef::Param(_, _) => Kind::Other,
+        }
+    }
+
+    /// Resolve the kind of a Path. Handles subscripts into Map fields by
+    /// reading through the map's value-record to find the trailing field.
+    fn path_kind(&self, p: &a::Path) -> Kind {
+        // `state.x.y` or `state.accounts[i].capital` or bare `amount`
+        if p.root == "state" {
+            // Walk the segments: first Field must be a state field; subsequent
+            // Fields index into a record or Map-of-record.
+            let mut current: Option<&a::TypeRef> = None;
+            for seg in &p.segments {
+                match seg {
+                    a::PathSeg::Field(f) => {
+                        let field_ty = match current {
+                            None => self.state_fields.get(f).copied(),
+                            Some(a::TypeRef::Named(rec_name)) => {
+                                self.records.get(rec_name).and_then(|m| m.get(f).copied())
+                            }
+                            Some(a::TypeRef::Map { inner, .. }) => {
+                                // direct .field after a Map without [idx] shouldn't happen
+                                // in valid specs, but bottom out safely
+                                if let a::TypeRef::Named(rec_name) = inner.as_ref() {
+                                    self.records.get(rec_name).and_then(|m| m.get(f).copied())
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        current = field_ty;
+                    }
+                    a::PathSeg::Index(_) => {
+                        // Subscript into a Map: advance `current` to the inner record type.
+                        if let Some(a::TypeRef::Map { inner, .. }) = current {
+                            current = Some(inner.as_ref());
+                        }
+                    }
+                }
+            }
+            return current.map(|t| self.type_ref_kind(t)).unwrap_or(Kind::Nat);
+        }
+        // Bare ident — try handler params first.
+        if p.segments.is_empty() {
+            if let Some((_, ty)) = self.params.iter().find(|(n, _)| n == &p.root) {
+                return self.type_ref_kind(ty);
+            }
+        }
+        Kind::Nat
+    }
+
+    /// Resolve the SOURCE type name of a path expression — e.g.,
+    /// `state.accounts[i]` → `"Account"` when `accounts : Map[N] Account`.
+    /// Returns None when the path terminates on a primitive/Bool/unknown type
+    /// or doesn't refer into the state.
+    fn path_type_name(&self, p: &a::Path) -> Option<String> {
+        if p.root != "state" {
+            if p.segments.is_empty() {
+                if let Some((_, a::TypeRef::Named(n))) =
+                    self.params.iter().find(|(n, _)| n == &p.root)
+                {
+                    return Some(n.clone());
+                }
+            }
+            return None;
+        }
+        let mut current: Option<&a::TypeRef> = None;
+        for seg in &p.segments {
+            match seg {
+                a::PathSeg::Field(f) => {
+                    current = match current {
+                        None => self.state_fields.get(f).copied(),
+                        Some(a::TypeRef::Named(rec)) => {
+                            self.records.get(rec).and_then(|m| m.get(f).copied())
+                        }
+                        Some(a::TypeRef::Map { inner, .. }) => {
+                            if let a::TypeRef::Named(rec) = inner.as_ref() {
+                                self.records.get(rec).and_then(|m| m.get(f).copied())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                }
+                a::PathSeg::Index(_) => {
+                    if let Some(a::TypeRef::Map { inner, .. }) = current {
+                        current = Some(inner.as_ref());
+                    }
+                }
+            }
+        }
+        match current? {
+            a::TypeRef::Named(n) => Some(n.clone()),
+            _ => None,
+        }
+    }
+
+    /// Infer the kind of an Expr.
+    fn infer(&self, e: &Expr) -> Kind {
+        match e {
+            Expr::Int(_) => Kind::Nat, // Lean elaborates literals against context.
+            Expr::Bool(_) => Kind::Bool,
+            Expr::Path(p) => self.path_kind(p),
+            Expr::Old(inner) => self.infer(&inner.node),
+            Expr::Sum { body, .. } => self.infer(&body.node),
+            Expr::Quant { .. } => Kind::Bool,
+            Expr::BoolOp { .. } => Kind::Bool,
+            Expr::Not(_) => Kind::Bool,
+            Expr::Cmp { .. } => Kind::Bool,
+            Expr::Arith { lhs, rhs, .. } => {
+                let lk = self.infer(&lhs.node);
+                let rk = self.infer(&rhs.node);
+                // Int dominates Nat; anything with Other stays Nat (safe default).
+                match (lk, rk) {
+                    (Kind::Int, _) | (_, Kind::Int) => Kind::Int,
+                    _ => Kind::Nat,
+                }
+            }
+            Expr::Paren(inner) => self.infer(&inner.node),
+            // mul_div_floor/ceil follow the operand types: Int if any of a or
+            // b is Int, else Nat. Divisor kind doesn't promote — it's a scale.
+            Expr::MulDivFloor { a, b, .. } | Expr::MulDivCeil { a, b, .. } => {
+                let ak = self.infer(&a.node);
+                let bk = self.infer(&b.node);
+                match (ak, bk) {
+                    (Kind::Int, _) | (_, Kind::Int) => Kind::Int,
+                    _ => Kind::Nat,
+                }
+            }
+            // Match result type: use the first arm's body. Arms must agree;
+            // in phase 1 we don't cross-check.
+            Expr::Match { arms, .. } => arms
+                .first()
+                .map(|a| self.infer(&a.body.node))
+                .unwrap_or(Kind::Other),
+            // Constructor value — sum-type result. Kind is Other because
+            // downstream consumers (Map updates, effect assignments) don't
+            // need arithmetic promotion for the outer value.
+            Expr::Ctor { .. } => Kind::Other,
+            // Anonymous record literal — Other (no arithmetic promotion).
+            Expr::RecordLit(_) => Kind::Other,
+            // Record update produces the same kind as the base.
+            Expr::RecordUpdate { base, .. } => self.infer(&base.node),
+            // Constructor test → Bool (propositional).
+            Expr::IsVariant { .. } => Kind::Bool,
+            // Function application — abstract, treat as Other (no promotion).
+            Expr::App { .. } => Kind::Other,
+            // Postfix field access — abstract, treat as Other.
+            Expr::Field { .. } => Kind::Other,
+            // `let x = v in body` — kind follows the body (the let is
+            // transparent from the caller's perspective).
+            Expr::Let { body, .. } => self.infer(&body.node),
+            // `if c then a else b` — both branches must agree; in phase 1
+            // we trust the type checker and use the then-branch's kind.
+            Expr::IfThenElse { then_branch, .. } => self.infer(&then_branch.node),
+        }
+    }
+
+    /// True iff this Path resolves to a state/record field whose type would
+    /// be lowered to a Quasar Pod companion (`U16`/`U32`/`U64`/`U128` →
+    /// `PodU16`/…/`PodU128`; `I16`/…/`I128` → `PodI16`/…; `Bool` →
+    /// `PodBool`). `U8`/`I8` stay native (alignment 1 already), so they
+    /// don't need `.get()` and are reported as not Pod.
+    ///
+    /// Only state-rooted paths apply — handler parameters arrive at the
+    /// inner handler in their native form (the dispatch shim unwraps
+    /// `PodU64` → `u64` etc.) so a bare-ident param load isn't Pod.
+    fn path_is_pod_field(&self, p: &a::Path) -> bool {
+        if p.root != "state" {
+            return false;
+        }
+        let Some(t) = self.path_type_ref(p) else {
+            return false;
+        };
+        match t {
+            a::TypeRef::Named(n) => matches!(
+                n.as_str(),
+                "U16" | "U32" | "U64" | "U128" | "I16" | "I32" | "I64" | "I128" | "Bool"
+            ),
+            _ => false,
+        }
+    }
+
+    /// Resolve the leaf TypeRef of a Path, walking through state fields,
+    /// records, and Map subscripts. Mirrors `path_kind` but returns the
+    /// raw `TypeRef` instead of collapsing to `Kind`. Bare-ident params
+    /// resolve through `params`.
+    fn path_type_ref(&self, p: &a::Path) -> Option<&'a a::TypeRef> {
+        if p.root == "state" {
+            let mut current: Option<&a::TypeRef> = None;
+            for seg in &p.segments {
+                match seg {
+                    a::PathSeg::Field(f) => {
+                        let next = match current {
+                            None => self.state_fields.get(f).copied(),
+                            Some(a::TypeRef::Named(rec)) => {
+                                self.records.get(rec).and_then(|m| m.get(f).copied())
+                            }
+                            Some(a::TypeRef::Map { inner, .. }) => match inner.as_ref() {
+                                a::TypeRef::Named(rec) => {
+                                    self.records.get(rec).and_then(|m| m.get(f).copied())
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        current = next;
+                    }
+                    a::PathSeg::Index(_) => {
+                        if let Some(a::TypeRef::Map { inner, .. }) = current {
+                            current = Some(inner.as_ref());
+                        }
+                    }
+                }
+            }
+            return current;
+        }
+        if p.segments.is_empty() {
+            return self
+                .params
+                .iter()
+                .find(|(n, _)| n == &p.root)
+                .map(|(_, t)| *t);
+        }
+        None
+    }
+}
+
+/// Render typed expression to a Lean-compatible string (unicode operators).
+/// Threads a `TypeEnv` through so arithmetic/comparison can promote Nat→Int
+/// when operands' kinds differ.
+fn expr_to_lean(e: &Expr, ctx: Ctx, consts: ConstTable, env: &TypeEnv) -> String {
+    match e {
+        Expr::Int(v) => v.to_string(),
+        // Bool literal in Lean 4 is lowercase `true`/`false` (the `Bool`
+        // inductive). `True`/`False` are *Props*, so an effect RHS like
+        // `flag := True` would type-error when `flag : Bool`. This was
+        // the latent half of issue #8 finding #6 (the cover-witness
+        // side used `"0"` for Bool; this side used Prop).
+        Expr::Bool(b) => b.to_string(),
+        Expr::Path(p) => path_to_lean(p, ctx, /*inside_old=*/ false, consts),
+        Expr::Old(inner) => path_or_expr_to_lean_old(&inner.node, ctx, consts, env),
+        Expr::Sum {
+            binder,
+            binder_ty,
+            body,
+        } => format!(
+            "(\u{2211} {} : {}, {})",
+            binder,
+            binder_ty,
+            expr_to_lean(&body.node, ctx, consts, env)
+        ),
+        Expr::Quant {
+            kind,
+            binder,
+            binder_ty,
+            body,
+        } => {
+            let sym = match kind {
+                a::Quantifier::Forall => "\u{2200}",
+                a::Quantifier::Exists => "\u{2203}",
+            };
+            let lean_ty = match binder_ty.as_str() {
+                "U64" | "U32" | "U16" | "U8" | "U128" => "Nat",
+                "I64" | "I32" | "I16" | "I8" | "I128" => "Int",
+                other => other,
+            };
+            format!(
+                "{} {} : {}, {}",
+                sym,
+                binder,
+                lean_ty,
+                expr_to_lean(&body.node, ctx, consts, env)
+            )
+        }
+        Expr::BoolOp { op, lhs, rhs } => {
+            let sym = match op {
+                a::BoolOp::And => " \u{2227} ",
+                a::BoolOp::Or => " \u{2228} ",
+                a::BoolOp::Implies => " \u{2192} ",
+            };
+            format!(
+                "{}{}{}",
+                expr_to_lean(&lhs.node, ctx, consts, env),
+                sym,
+                expr_to_lean(&rhs.node, ctx, consts, env)
+            )
+        }
+        Expr::Not(inner) => {
+            format!("\u{00AC}({})", expr_to_lean(&inner.node, ctx, consts, env))
+        }
+        Expr::Cmp { op, lhs, rhs } => {
+            let sym = match op {
+                a::CmpOp::Eq => "=",
+                a::CmpOp::Ne => "\u{2260}",
+                a::CmpOp::Le => "\u{2264}",
+                a::CmpOp::Ge => "\u{2265}",
+                a::CmpOp::Lt => "<",
+                a::CmpOp::Gt => ">",
+            };
+            let (l_str, r_str) =
+                render_binary_with_coercion(&lhs.node, &rhs.node, ctx, consts, env);
+            format!("{} {} {}", l_str, sym, r_str)
+        }
+        Expr::Arith { op, lhs, rhs } => {
+            let sym = match op {
+                a::ArithOp::Add => " + ",
+                a::ArithOp::Sub => " - ",
+                a::ArithOp::Mul => " * ",
+                a::ArithOp::Div => " / ",
+                a::ArithOp::Mod => " % ",
+            };
+            let (l_str, r_str) =
+                render_binary_with_coercion(&lhs.node, &rhs.node, ctx, consts, env);
+            format!("{}{}{}", l_str, sym, r_str)
+        }
+        Expr::Paren(inner) => format!("({})", expr_to_lean(&inner.node, ctx, consts, env)),
+        Expr::MulDivFloor { a, b, d } => {
+            // Lean Int is unbounded — the math simplifies to `(a * b) / d`
+            // with integer division. If any operand is Int, the whole expr
+            // is Int; otherwise we stay in Nat. Overflow is a Rust-codegen
+            // concern, not a proof concern.
+            let (a_str, b_str) = render_binary_with_coercion(&a.node, &b.node, ctx, consts, env);
+            let d_str = expr_to_lean(&d.node, ctx, consts, env);
+            format!("((({}) * ({})) / ({}))", a_str, b_str, d_str)
+        }
+        Expr::Match { scrutinee, arms } => {
+            // Render as Lean's `match ... with | Ctor binder? => body | ...`.
+            // If the body doesn't reference the binder, emit `_` instead —
+            // Lean's Decidable-synthesis is tripped up by named binders in
+            // Prop-valued arms that don't use them.
+            let sc = expr_to_lean(&scrutinee.node, ctx, consts, env);
+            let mut out = String::new();
+            out.push_str("(match ");
+            out.push_str(&sc);
+            out.push_str(" with");
+            for arm in arms {
+                let body_str = expr_to_lean(&arm.body.node, ctx, consts, env);
+                let binder_used = arm
+                    .binder
+                    .as_deref()
+                    .map(|b| body_mentions_binder(&body_str, b))
+                    .unwrap_or(false);
+                out.push_str(&format!("\n    | .{}", arm.variant));
+                if let Some(b) = &arm.binder {
+                    out.push(' ');
+                    if binder_used {
+                        out.push_str(b);
+                    } else {
+                        out.push('_');
+                    }
+                }
+                out.push_str(" => ");
+                out.push_str(&body_str);
+            }
+            out.push(')');
+            out
+        }
+        Expr::Ctor { variant, payload } => {
+            // Lean anonymous constructor: `.Variant` or `.Variant <payload>`.
+            // Payload is typically a record literal or record update; renders
+            // verbatim. Lean's elaborator resolves the expected type.
+            match payload {
+                None => format!(".{}", variant),
+                Some(p) => format!(".{} {}", variant, expr_to_lean(&p.node, ctx, consts, env)),
+            }
+        }
+        Expr::RecordLit(fields) => {
+            let body = fields
+                .iter()
+                .map(|(n, v)| format!("{} := {}", n, expr_to_lean(&v.node, ctx, consts, env)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {} }}", body)
+        }
+        Expr::RecordUpdate { base, updates } => {
+            let base_str = expr_to_lean(&base.node, ctx, consts, env);
+            let body = updates
+                .iter()
+                .map(|(n, v)| format!("{} := {}", n, expr_to_lean(&v.node, ctx, consts, env)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {} with {} }}", base_str, body)
+        }
+        Expr::IsVariant { scrutinee, variant } => {
+            // Route through the per-variant helper when we can resolve the
+            // scrutinee's type. `TypeName.isVariant x = true` is always
+            // Decidable (Bool equality), unlike a raw match on a Prop.
+            // Fallback path (unknown type): inline match, may not elaborate
+            // if Lean can't synthesize Decidable.
+            let sc = expr_to_lean(&scrutinee.node, ctx, consts, env);
+            if let Expr::Path(p) = &scrutinee.node {
+                if let Some(ty_name) = env.path_type_name(p) {
+                    return format!("({}.is{} {} = true)", ty_name, variant, sc);
+                }
+            }
+            format!("(match {} with | .{} _ => True | _ => False)", sc, variant)
+        }
+        Expr::MulDivCeil { a, b, d } => {
+            // ceil(a*b/d) = (a*b + d - 1) / d   for positive d.
+            // Lean: we emit the identity directly. Signed operands still
+            // work because Lean's integer division rounds toward zero; for
+            // positive `d` and nonnegative `a*b` this matches ceiling.
+            // Spec authors assume `d > 0`; downstream proofs rely on that.
+            let (a_str, b_str) = render_binary_with_coercion(&a.node, &b.node, ctx, consts, env);
+            let d_str = expr_to_lean(&d.node, ctx, consts, env);
+            format!(
+                "((({}) * ({}) + ({}) - 1) / ({}))",
+                a_str, b_str, d_str, d_str
+            )
+        }
+        Expr::App { func, args } => {
+            // Lean function application: `f a b c` (space-separated, parenthesized
+            // args). Leaves `func` as the raw name — downstream users declare
+            // these as uninterpreted helpers (axioms or defs) in a support module.
+            let args_str: Vec<String> = args
+                .iter()
+                .map(|n| format!("({})", expr_to_lean(&n.node, ctx, consts, env)))
+                .collect();
+            format!("({} {})", func, args_str.join(" "))
+        }
+        Expr::Field { base, field } => {
+            let base_str = expr_to_lean(&base.node, ctx, consts, env);
+            format!("({}).{}", base_str, field)
+        }
+        Expr::Let { name, value, body } => {
+            // Lean's `let x := v; body` is semicolon-separated inside a
+            // tactic-free term position, which is what ensures/requires give us.
+            format!(
+                "(let {} := {}; {})",
+                name,
+                expr_to_lean(&value.node, ctx, consts, env),
+                expr_to_lean(&body.node, ctx, consts, env)
+            )
+        }
+        Expr::IfThenElse {
+            cond,
+            then_branch,
+            else_branch,
+        } => format!(
+            "(if {} then {} else {})",
+            expr_to_lean(&cond.node, ctx, consts, env),
+            expr_to_lean(&then_branch.node, ctx, consts, env),
+            expr_to_lean(&else_branch.node, ctx, consts, env),
+        ),
+    }
+}
+
+/// Render both sides of a binary op, inserting a `((x : Int))` coercion on
+/// whichever side is Nat when the other is Int. Leaves operand pairs of
+/// matching kind untouched.
+fn render_binary_with_coercion(
+    lhs: &Expr,
+    rhs: &Expr,
+    ctx: Ctx,
+    consts: ConstTable,
+    env: &TypeEnv,
+) -> (String, String) {
+    let lk = env.infer(lhs);
+    let rk = env.infer(rhs);
+    let l_str = expr_to_lean(lhs, ctx, consts, env);
+    let r_str = expr_to_lean(rhs, ctx, consts, env);
+    match (lk, rk) {
+        (Kind::Nat, Kind::Int) => (format!("((({}) : Int))", l_str), r_str),
+        (Kind::Int, Kind::Nat) => (l_str, format!("((({}) : Int))", r_str)),
+        _ => (l_str, r_str),
+    }
+}
+
+/// Render path to Lean form, honoring `state.X` prefix. Bare idents matching
+/// a declared constant are substituted with the literal value (pest parity).
+fn path_to_lean(p: &a::Path, ctx: Ctx, inside_old: bool, consts: ConstTable) -> String {
+    let mut out = String::new();
+    let is_state_path = p.root == "state";
+    if is_state_path {
+        let prefix = if inside_old {
+            "s."
+        } else {
+            match ctx {
+                Ctx::Guard => "s.",
+                Ctx::Ensures => "s'.",
+            }
+        };
+        out.push_str(prefix);
+        for seg in &p.segments {
+            match seg {
+                a::PathSeg::Field(f) => {
+                    if out.ends_with('.') {
+                        out.push_str(f);
+                    } else {
+                        out.push('.');
+                        out.push_str(f);
+                    }
+                }
+                a::PathSeg::Index(i) => {
+                    out.push('[');
+                    out.push_str(i);
+                    out.push(']');
+                }
+            }
+        }
+        if out.ends_with('.') {
+            out.pop();
+        }
+    } else if p.segments.is_empty() {
+        // Bare ident — substitute if declared as a const.
+        if let Some(v) = consts.get(&p.root) {
+            out.push_str(v);
+        } else {
+            out.push_str(&p.root);
+        }
+    } else {
+        out.push_str(&p.root);
+        for seg in &p.segments {
+            match seg {
+                a::PathSeg::Field(f) => {
+                    out.push('.');
+                    out.push_str(f);
+                }
+                a::PathSeg::Index(i) => {
+                    out.push('[');
+                    out.push_str(i);
+                    out.push(']');
+                }
+            }
+        }
+    }
+    out
+}
+
+fn path_or_expr_to_lean_old(inner: &Expr, ctx: Ctx, consts: ConstTable, env: &TypeEnv) -> String {
+    match inner {
+        Expr::Path(p) => path_to_lean(p, ctx, /*inside_old=*/ true, consts),
+        other => match ctx {
+            Ctx::Guard => {
+                let rendered = expr_to_lean(other, Ctx::Guard, consts, env);
+                format!("\u{00AB}old({})\u{00BB}", strip_state_prefix(&rendered))
+            }
+            Ctx::Ensures => expr_to_lean(other, Ctx::Guard, consts, env),
+        },
+    }
+}
+
+/// Check if an arm body string mentions an identifier as a whole word.
+/// Used to decide whether to preserve `binder` or emit `_` in match arms.
+fn body_mentions_binder(body: &str, binder: &str) -> bool {
+    if binder.is_empty() {
+        return false;
+    }
+    let bytes = body.as_bytes();
+    let target = binder.as_bytes();
+    let n = bytes.len();
+    let m = target.len();
+    if m > n {
+        return false;
+    }
+    let is_ident_char = |c: u8| (c as char).is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i + m <= n {
+        if &bytes[i..i + m] == target {
+            let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
+            let after_ok = i + m == n || !is_ident_char(bytes[i + m]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn strip_state_prefix(s: &str) -> String {
+    s.strip_prefix("s.")
+        .or_else(|| s.strip_prefix("s'."))
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| s.to_string())
+}
+
+/// Per-render options for `expr_to_rust`. `pod_aware` is set when the
+/// containing codegen target is Quasar — that's where state/record
+/// integer fields are lowered to Pod companions and need `.get()` on
+/// access plus a Nat→Int promotion for mixed-kind binops. `env` carries
+/// the `TypeEnv` used to infer kinds and detect Pod fields.
+#[derive(Copy, Clone)]
+struct RustOpts<'a, 'env> {
+    pod_aware: bool,
+    env: &'a TypeEnv<'env>,
+}
+
+/// Empty `RustOpts` for callsites that don't have a real `TypeEnv` (e.g.
+/// pre-spec rendering). Shape is identical to passing through the legacy
+/// signature: no Pod-awareness, no kind promotion.
+#[allow(dead_code)]
+fn rust_opts_default<'a>() -> RustOpts<'a, 'a> {
+    RustOpts {
+        pod_aware: false,
+        env: Box::leak(Box::new(TypeEnv::default())),
+    }
+}
+
+/// `RustOpts` matching the legacy non-Pod-aware behavior. Used for the
+/// `rust_expr` field that codegen consumes when emitting for Anchor (or
+/// for any consumer that expects native Rust integer types).
+fn opts_native<'a, 'env>(env: &'a TypeEnv<'env>) -> RustOpts<'a, 'env> {
+    RustOpts {
+        pod_aware: false,
+        env,
+    }
+}
+
+/// `RustOpts` for the Pod-aware companion field (`rust_expr_pod`). Used
+/// when codegen is emitting for Quasar.
+fn opts_pod<'a, 'env>(env: &'a TypeEnv<'env>) -> RustOpts<'a, 'env> {
+    RustOpts {
+        pod_aware: true,
+        env,
+    }
+}
+
+/// Render typed expression to a Rust-compatible string (ASCII operators).
+fn expr_to_rust(e: &Expr, ctx: Ctx, consts: ConstTable, opts: RustOpts<'_, '_>) -> String {
+    match e {
+        Expr::Int(v) => v.to_string(),
+        Expr::Bool(b) => b.to_string(),
+        Expr::Path(p) => render_path_with_pod(p, ctx, false, consts, opts),
+        Expr::Old(inner) => match &inner.node {
+            Expr::Path(p) => render_path_with_pod(p, ctx, true, consts, opts),
+            other => format!("/*old({})*/", expr_to_rust(other, ctx, consts, opts)),
+        },
+        Expr::Sum {
+            binder,
+            binder_ty,
+            body,
+        } => format!(
+            "sum_over::<{}>(|{}| {})",
+            binder_ty,
+            binder,
+            expr_to_rust(&body.node, ctx, consts, opts)
+        ),
+        Expr::Quant {
+            kind,
+            binder,
+            binder_ty,
+            body,
+        } => {
+            // Small integer types (U8, I8) can be exhaustively iterated inside
+            // a property predicate using Rust's RangeInclusive::all / any. This
+            // is correct and cheap enough for test suites (256 iterations max).
+            //
+            // Larger types (U16+) cannot be exhausted in a test loop; surface
+            // the sentinel so the caller knows to skip or escalate.
+            let rust_ty = match binder_ty.as_str() {
+                "U8" => Some("u8"),
+                "I8" => Some("i8"),
+                _ => None,
+            };
+            let Some(rust_ty) = rust_ty else {
+                let kind_name = match kind {
+                    a::Quantifier::Forall => "forall",
+                    a::Quantifier::Exists => "exists",
+                };
+                return format!(
+                    "/* QEDGEN_UNSUPPORTED_QUANTIFIER: {} {} : {} — lower at harness level */",
+                    kind_name, binder, binder_ty
+                );
+            };
+            let method = match kind {
+                a::Quantifier::Forall => "all",
+                a::Quantifier::Exists => "any",
+            };
+            let body_rust = expr_to_rust(&body.node, ctx, consts, opts);
+            format!(
+                "({}::MIN..={}::MAX).{}(|{}| {})",
+                rust_ty, rust_ty, method, binder, body_rust
+            )
+        }
+        Expr::BoolOp { op, lhs, rhs } => {
+            let lhs_r = expr_to_rust(&lhs.node, ctx, consts, opts);
+            let rhs_r = expr_to_rust(&rhs.node, ctx, consts, opts);
+            match op {
+                a::BoolOp::And => format!("({}) && ({})", lhs_r, rhs_r),
+                a::BoolOp::Or => format!("({}) || ({})", lhs_r, rhs_r),
+                // `a implies b` ≡ `!a || b`; parenthesize both sides to survive
+                // surrounding precedence (matters once callers compose via `&&`/`||`).
+                a::BoolOp::Implies => format!("(!({})) || ({})", lhs_r, rhs_r),
+            }
+        }
+        Expr::Not(inner) => format!("!({})", expr_to_rust(&inner.node, ctx, consts, opts)),
+        Expr::Cmp { op, lhs, rhs } => {
+            let sym = match op {
+                a::CmpOp::Eq => "==",
+                a::CmpOp::Ne => "!=",
+                a::CmpOp::Le => "<=",
+                a::CmpOp::Ge => ">=",
+                a::CmpOp::Lt => "<",
+                a::CmpOp::Gt => ">",
+            };
+            let (l_str, r_str) = render_rust_binary_with_coercion(lhs, rhs, ctx, consts, opts);
+            format!("{} {} {}", l_str, sym, r_str)
+        }
+        Expr::Arith { op, lhs, rhs } => {
+            let sym = match op {
+                a::ArithOp::Add => " + ",
+                a::ArithOp::Sub => " - ",
+                a::ArithOp::Mul => " * ",
+                a::ArithOp::Div => " / ",
+                a::ArithOp::Mod => " % ",
+            };
+            let (l_str, r_str) = render_rust_binary_with_coercion(lhs, rhs, ctx, consts, opts);
+            format!("{}{}{}", l_str, sym, r_str)
+        }
+        Expr::Paren(inner) => format!("({})", expr_to_rust(&inner.node, ctx, consts, opts)),
+        Expr::MulDivFloor { a, b, d } => format!(
+            "mul_div_floor_u128({}, {}, {})",
+            render_helper_arg(&a.node, ctx, consts, opts),
+            render_helper_arg(&b.node, ctx, consts, opts),
+            render_helper_arg(&d.node, ctx, consts, opts)
+        ),
+        Expr::MulDivCeil { a, b, d } => format!(
+            "mul_div_ceil_u128({}, {}, {})",
+            render_helper_arg(&a.node, ctx, consts, opts),
+            render_helper_arg(&b.node, ctx, consts, opts),
+            render_helper_arg(&d.node, ctx, consts, opts)
+        ),
+        Expr::Match { scrutinee, arms } => {
+            let sc = expr_to_rust(&scrutinee.node, ctx, consts, opts);
+            let mut out = format!("match {} {{", sc);
+            for arm in arms {
+                out.push_str(&format!("\n    {}::{}", "/* ty */", arm.variant));
+                if let Some(b) = &arm.binder {
+                    out.push_str(&format!("({})", b));
+                }
+                out.push_str(" => ");
+                out.push_str(&expr_to_rust(&arm.body.node, ctx, consts, opts));
+                out.push(',');
+            }
+            out.push_str("\n}");
+            out
+        }
+        Expr::Ctor { variant, payload } => match payload {
+            None => format!("{}::{}", "/* ty */", variant),
+            Some(p) => format!(
+                "{}::{}({})",
+                "/* ty */",
+                variant,
+                expr_to_rust(&p.node, ctx, consts, opts)
+            ),
+        },
+        Expr::RecordLit(fields) => {
+            let body = fields
+                .iter()
+                .map(|(n, v)| format!("{}: {}", n, expr_to_rust(&v.node, ctx, consts, opts)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} {{ {} }}", "/* ty */", body)
+        }
+        Expr::RecordUpdate { base, updates } => {
+            let base_str = expr_to_rust(&base.node, ctx, consts, opts);
+            let body = updates
+                .iter()
+                .map(|(n, v)| format!("{}: {}", n, expr_to_rust(&v.node, ctx, consts, opts)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} {{ {}, ..{} }}", "/* ty */", body, base_str)
+        }
+        Expr::IsVariant { scrutinee, variant } => {
+            let sc = expr_to_rust(&scrutinee.node, ctx, consts, opts);
+            format!("matches!({}, {}::{}(..))", sc, "/* ty */", variant)
+        }
+        Expr::App { func, args } => {
+            let args_str: Vec<String> = args
+                .iter()
+                .map(|n| expr_to_rust(&n.node, ctx, consts, opts))
+                .collect();
+            format!("{}({})", func, args_str.join(", "))
+        }
+        Expr::Field { base, field } => {
+            let base_str = expr_to_rust(&base.node, ctx, consts, opts);
+            format!("{}.{}", base_str, field)
+        }
+        Expr::Let { name, value, body } => {
+            // Rust lowers a let-in expression to a block. Parentheses are
+            // safe around the block for embedding in larger expressions.
+            format!(
+                "({{ let {} = {}; {} }})",
+                name,
+                expr_to_rust(&value.node, ctx, consts, opts),
+                expr_to_rust(&body.node, ctx, consts, opts)
+            )
+        }
+        Expr::IfThenElse {
+            cond,
+            then_branch,
+            else_branch,
+        } => format!(
+            "(if {} {{ {} }} else {{ {} }})",
+            expr_to_rust(&cond.node, ctx, consts, opts),
+            expr_to_rust(&then_branch.node, ctx, consts, opts),
+            expr_to_rust(&else_branch.node, ctx, consts, opts),
+        ),
+    }
+}
+
+/// Render a Path expression, applying a `.get()` postfix when the path
+/// resolves to a Pod-flavored field on Quasar (`pod_aware`). Non-Pod
+/// fields (`u8`/`i8`/`Bool` already alignment 1, plus paths into
+/// non-state types) pass through unchanged.
+fn render_path_with_pod(
+    p: &a::Path,
+    ctx: Ctx,
+    inside_old: bool,
+    consts: ConstTable,
+    opts: RustOpts<'_, '_>,
+) -> String {
+    let base = path_to_rust(p, ctx, inside_old, consts);
+    if opts.pod_aware && opts.env.path_is_pod_field(p) {
+        format!("{}.get()", base)
+    } else {
+        base
+    }
+}
+
+/// Rust-flavor kind inference: mostly the same as `TypeEnv::infer` but
+/// `MulDivFloor` / `MulDivCeil` always report `Nat` because the codegen
+/// lowers them to `mul_div_floor_u128` / `_ceil_u128` helpers that
+/// return `u128`. Without this override the Lean-style inheritance
+/// (`Int` if any operand is `Int`) bleeds the wrong type into Rust
+/// comparisons against the helper's u128 result.
+fn rust_infer_kind(env: &TypeEnv, e: &Expr) -> Kind {
+    match e {
+        Expr::MulDivFloor { .. } | Expr::MulDivCeil { .. } => Kind::Nat,
+        Expr::Paren(inner) => rust_infer_kind(env, &inner.node),
+        Expr::Old(inner) => rust_infer_kind(env, &inner.node),
+        _ => env.infer(e),
+    }
+}
+
+/// Render both sides of a binary op, applying a `... as i128` cast on
+/// whichever side is `Nat` when the other is `Int`. Mirrors the Lean-side
+/// `render_binary_with_coercion`.
+///
+/// The Nat→Int cast is target-independent: Rust rejects `u128 + i128` on
+/// any target (no implicit mixed-sign arithmetic). Pre-v2.11.1 this was
+/// gated on `opts.pod_aware`, which is only set for Quasar — the gate
+/// silently broke Anchor scaffolds whose specs mixed U128 + I128 (e.g.
+/// percolator's `state.accounts[i].capital + state.accounts[i].pnl`).
+/// The `pod_aware` flag stays for `.get()` lowering on Pod fields; it
+/// has no business gating signed/unsigned coercion.
+fn render_rust_binary_with_coercion(
+    lhs: &Node<Expr>,
+    rhs: &Node<Expr>,
+    ctx: Ctx,
+    consts: ConstTable,
+    opts: RustOpts<'_, '_>,
+) -> (String, String) {
+    let lk = rust_infer_kind(opts.env, &lhs.node);
+    let rk = rust_infer_kind(opts.env, &rhs.node);
+    let l = expr_to_rust(&lhs.node, ctx, consts, opts);
+    let r = expr_to_rust(&rhs.node, ctx, consts, opts);
+    match (lk, rk) {
+        (Kind::Nat, Kind::Int) => (format!("(({}) as i128)", l), r),
+        (Kind::Int, Kind::Nat) => (l, format!("(({}) as i128)", r)),
+        _ => (l, r),
+    }
+}
+
+/// `mul_div_floor_u128` / `mul_div_ceil_u128` accept `u128` arguments.
+/// Spec operands may be U64 / I64 / I128 / native handler params — all of
+/// which fail the `u128` parameter check. Cast unconditionally so the
+/// helper signature is honored uniformly on every target. (`as u128`
+/// from u64 is widening; from i128 it's saturating-by-truncation, which
+/// matches the spec's Int → u128 lowering used by the Lean side.)
+///
+/// Pre-v2.11.1 this was gated on `opts.pod_aware`, which is only set for
+/// Quasar — the gate silently broke Anchor scaffolds that called the
+/// helpers (e.g. percolator's `mul_div_floor_u128(size_q, exec_price,
+/// 1000000)` with mixed `i128`/`u64` args).
+fn render_helper_arg(e: &Expr, ctx: Ctx, consts: ConstTable, opts: RustOpts<'_, '_>) -> String {
+    let rendered = expr_to_rust(e, ctx, consts, opts);
+    format!("(({}) as u128)", rendered)
+}
+
+fn path_to_rust(p: &a::Path, _ctx: Ctx, _inside_old: bool, consts: ConstTable) -> String {
+    let mut out = String::new();
+    if p.segments.is_empty() && p.root != "state" {
+        // Bare ident — substitute if declared as a const (pest parity).
+        if let Some(v) = consts.get(&p.root) {
+            return v.clone();
+        }
+    }
+    // B12 (v2.6.1): `state.X` lowers to `s.X` — every Rust consumer (property
+    // fn bodies, transition-fn assume predicates, abort.rust_expr, etc.) binds
+    // state to a parameter named `s`. Previously we emitted `state` as-is and
+    // relied on a post-hoc `translate_guard_to_rust` string replace to fix it,
+    // which covered `requires` but missed property bodies consumed raw via
+    // `prop.rust_expression`.
+    if p.root == "state" {
+        out.push('s');
+    } else {
+        out.push_str(&p.root);
+    }
+    for seg in &p.segments {
+        match seg {
+            a::PathSeg::Field(f) => {
+                out.push('.');
+                out.push_str(f);
+            }
+            a::PathSeg::Index(i) => {
+                // Cast index expression to `usize`. A Map[N] T lowers to
+                // `[T; N]`; the spec's index could be a u8/u16/u32/Fin
+                // handler param, none of which Rust accepts directly as
+                // an array index. The `as usize` cast is always safe (no
+                // negative values reach this path — Fin/U* are unsigned).
+                out.push('[');
+                out.push('(');
+                out.push_str(i);
+                out.push_str(") as usize");
+                out.push(']');
+            }
+        }
+    }
+    out
+}
+
+// ============================================================================
+// Type reference rendering (to the legacy type-string form)
+// ============================================================================
+
+/// True if `name` is used as the inner value type of any `Map[N] T` field
+/// in any record or state ADT variant anywhere in `spec`. Sum types that
+/// qualify get inductive Lean codegen; other ADTs stay on the flatten path.
+fn is_map_value_sum_type(name: &str, spec: &a::Spec) -> bool {
+    // Check all record fields and ADT variant fields for `Map[N] <name>`.
+    fn type_ref_uses_map_value(t: &a::TypeRef, name: &str) -> bool {
+        match t {
+            a::TypeRef::Map { inner, .. } => match inner.as_ref() {
+                a::TypeRef::Named(n) => n == name,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    for Node { node, .. } in &spec.items {
+        match node {
+            TopItem::Record(r) => {
+                for f in &r.fields {
+                    if type_ref_uses_map_value(&f.ty, name) {
+                        return true;
+                    }
+                }
+            }
+            TopItem::Adt(adt) => {
+                for v in &adt.variants {
+                    for f in &v.fields {
+                        if type_ref_uses_map_value(&f.ty, name) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn type_ref_to_string(t: &a::TypeRef) -> String {
+    match t {
+        a::TypeRef::Named(n) => n.clone(),
+        a::TypeRef::Param(head, tail) => format!("{} {}", head, tail),
+        a::TypeRef::Map { bound, inner } => {
+            format!("Map[{}] {}", bound, type_ref_to_string(inner))
+        }
+        a::TypeRef::Fin { bound } => format!("Fin[{}]", bound),
+    }
+}
+
+/// Resolve a type reference through a table of aliases until we hit a
+/// non-alias target. Cyclic aliases bottom out on a fixed number of hops.
+///
+/// Scaffolding: used once the adapter grows alias-aware coercion for guard
+/// expressions (e.g., `type Amount = U128` appearing in a requires/effect).
+/// Kept near the typed-AST surface so it's ready when that pass lands.
+#[allow(dead_code)]
+fn resolve_type_alias<'a>(
+    name: &str,
+    aliases: &'a std::collections::BTreeMap<String, a::TypeRef>,
+) -> Option<&'a a::TypeRef> {
+    let mut current = aliases.get(name)?;
+    for _ in 0..16 {
+        if let a::TypeRef::Named(n) = current {
+            if let Some(next) = aliases.get(n) {
+                current = next;
+                continue;
+            }
+        }
+        return Some(current);
+    }
+    Some(current)
+}
+
+// ============================================================================
+// Effect rendering: (field_name, op, value_string)
+// ============================================================================
+
+fn render_effect(
+    stmt: &a::EffectStmt,
+    params: &[(String, String)],
+    consts: ConstTable,
+) -> (String, String, String) {
+    // Field name: preserve subscript syntax as-is (e.g., `accounts[i].capital`).
+    // Both Lean and Rust consumers read this string; Rust-side `as usize`
+    // index casting is applied at the codegen.rs::mechanize_effect site
+    // so the Lean output stays untouched.
+    let field = {
+        let mut s = stmt.lhs.root.clone();
+        for seg in &stmt.lhs.segments {
+            match seg {
+                a::PathSeg::Field(f) => {
+                    s.push('.');
+                    s.push_str(f);
+                }
+                a::PathSeg::Index(i) => {
+                    s.push('[');
+                    s.push_str(i);
+                    s.push(']');
+                }
+            }
+        }
+        s
+    };
+    // Per-effect semantic tag (v2.7 G3):
+    //   - "add" / "sub"               = checked (default)
+    //   - "add_sat" / "sub_sat"       = saturating (`+=!` / `-=!`)
+    //   - "add_wrap" / "sub_wrap"     = wrapping   (`+=?` / `-=?`)
+    // Existing code paths that test `kind == "add"` continue to work for the
+    // default case (the one they were written against). Codegen branches on
+    // the full tag when the distinction matters.
+    let op = match stmt.op {
+        a::EffectOp::Add => "add",
+        a::EffectOp::AddSat => "add_sat",
+        a::EffectOp::AddWrap => "add_wrap",
+        a::EffectOp::Sub => "sub",
+        a::EffectOp::SubSat => "sub_sat",
+        a::EffectOp::SubWrap => "sub_wrap",
+        a::EffectOp::Set => "set",
+    };
+    // Value string — match pest's effect_value_to_string which strips
+    // `state.` prefix for qualified refs and leaves bare idents / integers.
+    let value = match &stmt.rhs.node {
+        Expr::Int(v) => v.to_string(),
+        Expr::Path(p) => {
+            let is_param = p.segments.is_empty() && params.iter().any(|(n, _)| n == &p.root);
+            if is_param {
+                p.root.clone()
+            } else if p.root == "state" {
+                // state.X → X (strip prefix, matches pest output)
+                let mut s = String::new();
+                for seg in &p.segments {
+                    match seg {
+                        a::PathSeg::Field(f) => {
+                            if !s.is_empty() {
+                                s.push('.');
+                            }
+                            s.push_str(f);
+                        }
+                        a::PathSeg::Index(i) => {
+                            s.push('[');
+                            s.push_str(i);
+                            s.push(']');
+                        }
+                    }
+                }
+                s
+            } else {
+                // Bare path that isn't a param — emit as-is
+                let mut s = p.root.clone();
+                for seg in &p.segments {
+                    match seg {
+                        a::PathSeg::Field(f) => {
+                            s.push('.');
+                            s.push_str(f);
+                        }
+                        a::PathSeg::Index(i) => {
+                            s.push('[');
+                            s.push_str(i);
+                            s.push(']');
+                        }
+                    }
+                }
+                s
+            }
+        }
+        // Complex RHS (match / ctor / record update / arithmetic):
+        // render in Lean form. The effect value is consumed by lean_gen,
+        // so Lean-form rendering is what matters. Build a minimal type env
+        // for coercion — params only; spec-wide types would require the
+        // full env but aren't usually relevant on effect RHS.
+        other => {
+            let env = TypeEnv::default().with_params(&[]);
+            let params_slice: Vec<(String, a::TypeRef)> = params
+                .iter()
+                .map(|(n, t)| (n.clone(), string_to_typeref_best_effort(t)))
+                .collect();
+            let _ = params_slice; // future: plumb real params here for coercion
+            expr_to_lean(other, Ctx::Guard, consts, &env)
+        }
+    };
+    (field, op.to_string(), value)
+}
+
+/// Best-effort reconstruction of a `TypeRef` from its rendered string form,
+/// used only inside `render_effect` where we don't have the original AST.
+fn string_to_typeref_best_effort(s: &str) -> a::TypeRef {
+    a::TypeRef::Named(s.trim().to_string())
+}
+
+// ============================================================================
+// sBPF instruction adapter
+// ============================================================================
+
+/// Render a simple guard expression into the space-separated ASCII triple
+/// form consumed by `derive_guard_hypotheses` in `lean_gen`:
+///   `field == RHS`, `field >= RHS`, etc.
+/// When `resolve_consts` is true, bare identifiers that are declared constants
+/// are substituted with their values (for the `checks` form). Otherwise names
+/// are preserved verbatim (for the `checks_raw` form).
+fn render_sbpf_check(e: &Expr, consts: ConstTable, resolve_consts: bool) -> String {
+    fn render(e: &Expr, consts: ConstTable, resolve_consts: bool) -> String {
+        match e {
+            Expr::Int(v) => v.to_string(),
+            Expr::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+            Expr::Path(p) => {
+                // Render as root[.seg]* with no state prefix substitution.
+                if p.segments.is_empty() {
+                    if resolve_consts {
+                        if let Some(v) = consts.get(&p.root) {
+                            return v.clone();
+                        }
+                    }
+                    return p.root.clone();
+                }
+                let mut s = p.root.clone();
+                for seg in &p.segments {
+                    match seg {
+                        a::PathSeg::Field(f) => {
+                            s.push('.');
+                            s.push_str(f);
+                        }
+                        a::PathSeg::Index(i) => {
+                            s.push('[');
+                            s.push_str(i);
+                            s.push(']');
+                        }
+                    }
+                }
+                s
+            }
+            Expr::Paren(inner) => render(&inner.node, consts, resolve_consts),
+            Expr::Cmp { op, lhs, rhs } => {
+                let sym = match op {
+                    a::CmpOp::Eq => "==",
+                    a::CmpOp::Ne => "!=",
+                    a::CmpOp::Le => "<=",
+                    a::CmpOp::Ge => ">=",
+                    a::CmpOp::Lt => "<",
+                    a::CmpOp::Gt => ">",
+                };
+                format!(
+                    "{} {} {}",
+                    render(&lhs.node, consts, resolve_consts),
+                    sym,
+                    render(&rhs.node, consts, resolve_consts)
+                )
+            }
+            Expr::Arith { op, lhs, rhs } => {
+                let sym = match op {
+                    a::ArithOp::Add => "+",
+                    a::ArithOp::Sub => "-",
+                    a::ArithOp::Mul => "*",
+                    a::ArithOp::Div => "/",
+                    a::ArithOp::Mod => "%",
+                };
+                format!(
+                    "{} {} {}",
+                    render(&lhs.node, consts, resolve_consts),
+                    sym,
+                    render(&rhs.node, consts, resolve_consts)
+                )
+            }
+            // Fallback for unexpected shapes — pretty-print a minimal Lean-ish form.
+            other => {
+                let env = TypeEnv::default();
+                expr_to_lean(other, Ctx::Guard, consts, &env)
+            }
+        }
+    }
+    render(e, consts, resolve_consts)
+}
+
+/// Translate an `InstructionDecl` into the legacy `ParsedInstruction` shape.
+fn adapt_instruction(instr: &a::InstructionDecl, top_consts: ConstTable) -> ParsedInstruction {
+    let mut discriminant: Option<String> = None;
+    let mut entry: Option<u64> = None;
+    let mut constants: Vec<(String, String)> = Vec::new();
+    let mut errors: Vec<ParsedErrorCode> = Vec::new();
+    let mut input_layout: Vec<ParsedLayoutField> = Vec::new();
+    let mut insn_layout: Vec<ParsedLayoutField> = Vec::new();
+    let mut guard_decls: Vec<&a::GuardDecl> = Vec::new();
+    let mut prop_decls: Vec<&a::SbpfPropertyDecl> = Vec::new();
+
+    for item in &instr.items {
+        match item {
+            a::InstructionItem::Discriminant(d) => discriminant = Some(d.clone()),
+            a::InstructionItem::Entry(n) => entry = Some(*n),
+            a::InstructionItem::Const { name, value } => {
+                constants.push((name.clone(), value.to_string()));
+            }
+            a::InstructionItem::Errors(entries) => {
+                for e in entries {
+                    errors.push(ParsedErrorCode {
+                        name: e.name.clone(),
+                        value: e.code,
+                        description: e.description.clone(),
+                    });
+                }
+            }
+            a::InstructionItem::InputLayout(fs) => {
+                for f in fs {
+                    input_layout.push(ParsedLayoutField {
+                        name: f.name.clone(),
+                        field_type: f.field_type.clone(),
+                        offset: f.offset,
+                        description: f.description.clone(),
+                    });
+                }
+            }
+            a::InstructionItem::InsnLayout(fs) => {
+                for f in fs {
+                    insn_layout.push(ParsedLayoutField {
+                        name: f.name.clone(),
+                        field_type: f.field_type.clone(),
+                        offset: f.offset,
+                        description: f.description.clone(),
+                    });
+                }
+            }
+            a::InstructionItem::Guard(g) => guard_decls.push(g),
+            a::InstructionItem::SbpfProperty(p) => prop_decls.push(p),
+        }
+    }
+
+    // Build a merged const table: top-level constants + this instruction's
+    // local constants. Instruction-local wins on conflict (pest parity).
+    let mut merged = top_consts.clone();
+    for (name, value) in &constants {
+        merged.insert(name.clone(), value.clone());
+    }
+    let merged_consts: ConstTable = &merged;
+
+    let guards: Vec<ParsedGuard> = guard_decls
+        .iter()
+        .map(|g| {
+            let (checks, checks_raw) = match &g.checks {
+                Some(e) => (
+                    Some(render_sbpf_check(&e.node, merged_consts, true)),
+                    Some(render_sbpf_check(&e.node, merged_consts, false)),
+                ),
+                None => (None, None),
+            };
+            ParsedGuard {
+                name: g.name.clone(),
+                doc: g.doc.clone(),
+                checks,
+                checks_raw,
+                error: g.error.clone(),
+                fuel: g.fuel,
+            }
+        })
+        .collect();
+
+    let properties: Vec<ParsedSbpfProperty> =
+        prop_decls.iter().map(|p| adapt_sbpf_property(p)).collect();
+
+    ParsedInstruction {
+        name: instr.name.clone(),
+        doc: instr.doc.clone(),
+        discriminant,
+        entry,
+        constants,
+        errors,
+        input_layout,
+        insn_layout,
+        guards,
+        properties,
+    }
+}
+
+/// Pending CPI envelope data accumulated while scanning an sBPF property's
+/// clauses: (program, instruction, fields).
+type PendingCpi = (String, String, Vec<(String, String)>);
+
+fn adapt_sbpf_property(p: &a::SbpfPropertyDecl) -> ParsedSbpfProperty {
+    // Decide kind from the clauses. Later clauses override earlier ones when
+    // they set the same field. The presence of certain clauses determines the
+    // variant.
+    let mut scope_targets: Option<Vec<String>> = None;
+    let mut flow: Option<(String, FlowKind)> = None;
+    let mut cpi: Option<PendingCpi> = None;
+    let mut after_all_guards = false;
+    let mut exit: Option<u64> = None;
+    let mut has_expr = false;
+
+    for clause in &p.clauses {
+        match clause {
+            a::SbpfPropClause::Expr(_) => has_expr = true,
+            a::SbpfPropClause::PreservedBy(_) => {}
+            a::SbpfPropClause::Scope(names) => scope_targets = Some(names.clone()),
+            a::SbpfPropClause::Flow { target, kind } => {
+                let k = match kind {
+                    a::SbpfFlowKind::FromSeeds(xs) => FlowKind::FromSeeds(xs.clone()),
+                    a::SbpfFlowKind::Through(xs) => FlowKind::Through(xs.clone()),
+                };
+                flow = Some((target.clone(), k));
+            }
+            a::SbpfPropClause::Cpi {
+                program,
+                instruction,
+                fields,
+            } => {
+                cpi = Some((program.clone(), instruction.clone(), fields.clone()));
+            }
+            a::SbpfPropClause::AfterAllGuards => after_all_guards = true,
+            a::SbpfPropClause::Exit(n) => exit = Some(*n),
+        }
+    }
+
+    let _ = has_expr; // accepted but currently unused for routing
+    let kind = if let Some(targets) = scope_targets {
+        SbpfPropertyKind::Scope { targets }
+    } else if let Some((target, k)) = flow {
+        SbpfPropertyKind::Flow { target, kind: k }
+    } else if let Some((program, instruction, fields)) = cpi {
+        SbpfPropertyKind::Cpi {
+            program,
+            instruction,
+            fields,
+        }
+    } else if after_all_guards || exit.is_some() {
+        SbpfPropertyKind::HappyPath {
+            exit_code: exit.map(|n| n.to_string()).unwrap_or_default(),
+        }
+    } else {
+        // Either an explicit `expr` body or empty — the generic stub covers both.
+        SbpfPropertyKind::Generic
+    };
+
+    ParsedSbpfProperty {
+        name: p.name.clone(),
+        doc: p.doc.clone(),
+        kind,
+    }
+}
+
+// ============================================================================
+// Top-level adapter
+// ============================================================================
+
+/// Convenience: parse a spec source string into a `ParsedSpec` in one step.
+/// Used by tests and internal code paths that don't have a file on disk.
+pub fn parse_str(src: &str) -> anyhow::Result<ParsedSpec> {
+    let typed = crate::chumsky_parser::parse(src).map_err(|errs| {
+        let msg = errs
+            .iter()
+            .map(|e| format!("  {}", crate::chumsky_parser::format_parse_error(e, src)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::anyhow!("parse error:\n{}", msg)
+    })?;
+    let parsed = adapt(&typed);
+    typecheck_spec(&typed, &parsed)?;
+    Ok(parsed)
+}
+
+/// Walk every guard / ensures / effect-RHS / property body in the spec
+/// and collect every `Expr::App` call site as an uninterpreted helper.
+/// First-encounter wins for the signature; duplicates (same name, same
+/// arity) are skipped. Issue #8 finding #5.
+///
+/// Return type is always `Prop` — in practice every App call in the
+/// DSL lives in a boolean-valued position (guard, invariant, ensures,
+/// or a boolean-valued let binding). If a user puts a call in an
+/// arithmetic position (e.g. `effect { x := foo(y) + 1 }`), the emitted
+/// `axiom foo : T → Prop` won't typecheck; richer context-sensitive
+/// inference is a v2.8 candidate.
+fn collect_uninterpreted_helpers(
+    spec: &a::Spec,
+    parsed: &ParsedSpec,
+) -> Vec<(String, Vec<String>, String)> {
+    let field_types = collect_field_types(parsed);
+    let mut out: Vec<(String, Vec<String>, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, usize)> = std::collections::HashSet::new();
+
+    for Node { node, .. } in &spec.items {
+        match node {
+            TopItem::Handler(h) => {
+                let param_types: std::collections::HashMap<String, String> = h
+                    .params
+                    .iter()
+                    .map(|p| (p.name.clone(), type_ref_to_string(&p.ty)))
+                    .collect();
+                for Node { node: clause, .. } in &h.clauses {
+                    match clause {
+                        a::HandlerClause::Requires { guard, .. } => {
+                            walk_apps(&guard.node, &field_types, &param_types, &mut out, &mut seen);
+                        }
+                        a::HandlerClause::Ensures(e) => {
+                            walk_apps(&e.node, &field_types, &param_types, &mut out, &mut seen);
+                        }
+                        a::HandlerClause::Effect(stmts) => {
+                            for Node { node: s, .. } in stmts {
+                                walk_apps(
+                                    &s.rhs.node,
+                                    &field_types,
+                                    &param_types,
+                                    &mut out,
+                                    &mut seen,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            TopItem::Property(p) => {
+                walk_apps(
+                    &p.body.node,
+                    &field_types,
+                    &std::collections::HashMap::new(),
+                    &mut out,
+                    &mut seen,
+                );
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn walk_apps(
+    expr: &Expr,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+    out: &mut Vec<(String, Vec<String>, String)>,
+    seen: &mut std::collections::HashSet<(String, usize)>,
+) {
+    match expr {
+        Expr::App { func, args } => {
+            let key = (func.clone(), args.len());
+            if seen.insert(key) {
+                let arg_types: Vec<String> = args
+                    .iter()
+                    .map(|n| infer_lean_type(&n.node, field_types, param_types))
+                    .collect();
+                // Bool, not Prop. The original v2.7.1 F5 emission used
+                // `→ Prop`, which lands at codegen but breaks `lake build`
+                // — `requires` / `ensures` clauses lower to a transition
+                // function's `if`-guard, which Lean requires to be
+                // `Decidable`. `axiom foo : T → Prop` is opaque and
+                // noncomputable, so the transition fails to compile.
+                // `Bool` is auto-`Decidable` and lifts cleanly into
+                // `Prop` positions via the standard `b = true` coercion
+                // that the call-site renderer already produces. See
+                // issue #12.
+                out.push((func.clone(), arg_types, "Bool".to_string()));
+            }
+            for n in args {
+                walk_apps(&n.node, field_types, param_types, out, seen);
+            }
+        }
+        Expr::BoolOp { lhs, rhs, .. }
+        | Expr::Cmp { lhs, rhs, .. }
+        | Expr::Arith { lhs, rhs, .. } => {
+            walk_apps(&lhs.node, field_types, param_types, out, seen);
+            walk_apps(&rhs.node, field_types, param_types, out, seen);
+        }
+        Expr::Not(inner) | Expr::Paren(inner) | Expr::Old(inner) => {
+            walk_apps(&inner.node, field_types, param_types, out, seen);
+        }
+        Expr::Quant { body, .. } | Expr::Sum { body, .. } => {
+            walk_apps(&body.node, field_types, param_types, out, seen);
+        }
+        Expr::MulDivFloor { a, b, d } | Expr::MulDivCeil { a, b, d } => {
+            walk_apps(&a.node, field_types, param_types, out, seen);
+            walk_apps(&b.node, field_types, param_types, out, seen);
+            walk_apps(&d.node, field_types, param_types, out, seen);
+        }
+        _ => {}
+    }
+}
+
+/// Best-effort Lean type for an argument expression. Used only for
+/// axiom signature synthesis; a wrong guess degrades to a type error
+/// at `lake build` time, but isn't silently corrupting anything.
+fn infer_lean_type(
+    expr: &Expr,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+) -> String {
+    match expr {
+        Expr::Int(_) => "Nat".to_string(),
+        Expr::Bool(_) => "Bool".to_string(),
+        Expr::Path(p) => {
+            let dsl_type = resolve_path_type(p, field_types, param_types);
+            match dsl_type {
+                Some("Pubkey") => "Pubkey".to_string(),
+                Some("Bool") => "Bool".to_string(),
+                Some(t) if is_signed_int(t) => "Int".to_string(),
+                Some(_) => "Nat".to_string(),
+                None => "Nat".to_string(),
+            }
+        }
+        _ => "Nat".to_string(),
+    }
+}
+
+fn is_signed_int(t: &str) -> bool {
+    matches!(t, "I8" | "I16" | "I32" | "I64" | "I128")
+}
+
+/// Narrow check-time type guard for Pubkey-vs-numeric-literal mismatches
+/// in effect RHS and `requires` / `ensures` comparisons. Issue #8
+/// findings #7 and #8: the DSL has no Pubkey literal syntax, so
+/// `state.key := 0` (or `state.key != 0`) is always a category error,
+/// but qedgen v2.7.0 accepted both and the mismatch only surfaced at
+/// `lake build` — the exact failure mode v2.6.2 was refactored to
+/// avoid.
+///
+/// Scope is deliberately narrow: we only fail when one side is a
+/// resolved Pubkey field and the other side is a bare integer literal.
+/// Richer type inference can land later; the goal here is "don't let
+/// Pubkey = 0 pass silently."
+pub fn typecheck_spec(spec: &a::Spec, parsed: &ParsedSpec) -> anyhow::Result<()> {
+    let field_types = collect_field_types(parsed);
+    let const_literals = collect_numeric_consts(spec);
+
+    for Node { node, .. } in &spec.items {
+        if let TopItem::Handler(h) = node {
+            let param_types: std::collections::HashMap<String, String> = h
+                .params
+                .iter()
+                .map(|p| (p.name.clone(), type_ref_to_string(&p.ty)))
+                .collect();
+            typecheck_handler(h, &field_types, &param_types, &const_literals)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_numeric_consts(spec: &a::Spec) -> std::collections::HashMap<String, u128> {
+    let mut out = std::collections::HashMap::new();
+    for Node { node, .. } in &spec.items {
+        match node {
+            TopItem::Const { name, value } => {
+                out.insert(name.clone(), *value);
+            }
+            TopItem::Pragma(p) => {
+                for Node { node, .. } in &p.items {
+                    if let TopItem::Const { name, value } = node {
+                        out.insert(name.clone(), *value);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Flatten every field declaration in the spec into `name → DSL-type`.
+/// State fields, record fields, sum-variant payload fields, and
+/// account-type fields all live in the same namespace from the DSL's
+/// point of view — the same `state.key` can resolve against any of them.
+fn collect_field_types(parsed: &ParsedSpec) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (n, t) in &parsed.state_fields {
+        out.insert(n.clone(), t.clone());
+    }
+    for rec in &parsed.records {
+        for (n, t) in &rec.fields {
+            out.insert(n.clone(), t.clone());
+        }
+    }
+    for sum in &parsed.sum_types {
+        for v in &sum.variants {
+            for (n, t) in &v.fields {
+                out.insert(n.clone(), t.clone());
+            }
+        }
+    }
+    for acct in &parsed.account_types {
+        for (n, t) in &acct.fields {
+            out.insert(n.clone(), t.clone());
+        }
+    }
+    out
+}
+
+fn typecheck_handler(
+    h: &a::HandlerDecl,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+    const_literals: &std::collections::HashMap<String, u128>,
+) -> anyhow::Result<()> {
+    for Node { node, .. } in &h.clauses {
+        match node {
+            a::HandlerClause::Effect(stmts) => {
+                for Node { node: stmt, .. } in stmts {
+                    check_effect_typed(&h.name, stmt, field_types, param_types, const_literals)?;
+                }
+            }
+            a::HandlerClause::Requires { guard, .. } => {
+                check_cmp_types(
+                    &h.name,
+                    "requires",
+                    &guard.node,
+                    field_types,
+                    param_types,
+                    const_literals,
+                )?;
+            }
+            a::HandlerClause::Ensures(e) => {
+                check_cmp_types(
+                    &h.name,
+                    "ensures",
+                    &e.node,
+                    field_types,
+                    param_types,
+                    const_literals,
+                )?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the leaf field of a path like `state.key` or
+/// `accounts[i].capital` to its DSL type, if declared.
+fn resolve_path_type<'a>(
+    p: &a::Path,
+    field_types: &'a std::collections::HashMap<String, String>,
+    param_types: &'a std::collections::HashMap<String, String>,
+) -> Option<&'a str> {
+    // Walk the path to find the last `.field` segment — that's the leaf
+    // whose declared type matters for assignment/comparison.
+    let mut last_field: Option<&str> = None;
+    for seg in &p.segments {
+        if let a::PathSeg::Field(f) = seg {
+            last_field = Some(f.as_str());
+        }
+    }
+    match last_field {
+        Some(name) => field_types.get(name).map(String::as_str),
+        None => {
+            // Bare root identifier — either a handler param or a state
+            // field with no segments.
+            param_types
+                .get(&p.root)
+                .map(String::as_str)
+                .or_else(|| field_types.get(&p.root).map(String::as_str))
+        }
+    }
+}
+
+fn check_effect_typed(
+    handler_name: &str,
+    stmt: &a::EffectStmt,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+    const_literals: &std::collections::HashMap<String, u128>,
+) -> anyhow::Result<()> {
+    let lhs_type = match resolve_path_type(&stmt.lhs, field_types, param_types) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    if lhs_type == "Pubkey" {
+        if let Some(v) = numeric_literal_value(&stmt.rhs.node, const_literals) {
+            anyhow::bail!(
+                "handler `{}` effect `{} := {}`: Pubkey field cannot be assigned a numeric literal. \
+                 The DSL has no Pubkey-literal syntax — use a handler parameter, a constant, \
+                 or the spec's `program_id` as the source pubkey.",
+                handler_name,
+                render_path_human(&stmt.lhs),
+                v
+            );
+        }
+    }
+    Ok(())
+}
+
+fn check_cmp_types(
+    handler_name: &str,
+    clause_kind: &str,
+    expr: &Expr,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+    const_literals: &std::collections::HashMap<String, u128>,
+) -> anyhow::Result<()> {
+    match expr {
+        Expr::Cmp { lhs, rhs, .. } => {
+            check_cmp_pair(
+                handler_name,
+                clause_kind,
+                &lhs.node,
+                &rhs.node,
+                field_types,
+                param_types,
+                const_literals,
+            )?;
+            // Cmp operands are terminal atoms in the DSL (no nested Cmp),
+            // so no need to recurse into them.
+        }
+        Expr::BoolOp { lhs, rhs, .. } => {
+            check_cmp_types(
+                handler_name,
+                clause_kind,
+                &lhs.node,
+                field_types,
+                param_types,
+                const_literals,
+            )?;
+            check_cmp_types(
+                handler_name,
+                clause_kind,
+                &rhs.node,
+                field_types,
+                param_types,
+                const_literals,
+            )?;
+        }
+        Expr::Not(inner) | Expr::Paren(inner) | Expr::Old(inner) => {
+            check_cmp_types(
+                handler_name,
+                clause_kind,
+                &inner.node,
+                field_types,
+                param_types,
+                const_literals,
+            )?;
+        }
+        Expr::Quant { body, .. } | Expr::Sum { body, .. } => {
+            check_cmp_types(
+                handler_name,
+                clause_kind,
+                &body.node,
+                field_types,
+                param_types,
+                const_literals,
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn check_cmp_pair(
+    handler_name: &str,
+    clause_kind: &str,
+    lhs: &Expr,
+    rhs: &Expr,
+    field_types: &std::collections::HashMap<String, String>,
+    param_types: &std::collections::HashMap<String, String>,
+    const_literals: &std::collections::HashMap<String, u128>,
+) -> anyhow::Result<()> {
+    // Try both orientations (LHS Pubkey / RHS Int and vice versa).
+    let pubkey_vs_int = |p: &Expr, i: &Expr| -> Option<(String, u128)> {
+        let path = match p {
+            Expr::Path(path) => path,
+            _ => return None,
+        };
+        let t = resolve_path_type(path, field_types, param_types)?;
+        if t != "Pubkey" {
+            return None;
+        }
+        if let Some(v) = numeric_literal_value(i, const_literals) {
+            return Some((render_path_human(path), v));
+        }
+        None
+    };
+    if let Some((path_str, v)) = pubkey_vs_int(lhs, rhs).or_else(|| pubkey_vs_int(rhs, lhs)) {
+        anyhow::bail!(
+            "handler `{}` {} compares Pubkey `{}` with numeric literal `{}`. \
+             The DSL has no Pubkey-literal syntax — compare against a handler parameter, \
+             a constant, or the spec's `program_id` instead.",
+            handler_name,
+            clause_kind,
+            path_str,
+            v
+        );
+    }
+    Ok(())
+}
+
+fn numeric_literal_value(
+    expr: &Expr,
+    const_literals: &std::collections::HashMap<String, u128>,
+) -> Option<u128> {
+    match expr {
+        Expr::Int(v) => Some(*v),
+        Expr::Path(p) if p.segments.is_empty() => const_literals.get(&p.root).copied(),
+        Expr::Paren(inner) | Expr::Old(inner) => numeric_literal_value(&inner.node, const_literals),
+        _ => None,
+    }
+}
+
+fn render_path_human(p: &a::Path) -> String {
+    let mut out = p.root.clone();
+    for seg in &p.segments {
+        match seg {
+            a::PathSeg::Field(f) => {
+                out.push('.');
+                out.push_str(f);
+            }
+            a::PathSeg::Index(i) => {
+                out.push('[');
+                out.push_str(i);
+                out.push(']');
+            }
+        }
+    }
+    out
+}
+
+/// Translate the typed AST into a `ParsedSpec` compatible with current consumers.
+pub fn adapt(spec: &a::Spec) -> ParsedSpec {
+    let mut out = ParsedSpec {
+        program_name: spec.name.clone(),
+        ..ParsedSpec::default()
+    };
+
+    // First pass: collect constants so guard rendering can substitute them.
+    let mut consts_map: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for Node { node, .. } in &spec.items {
+        if let TopItem::Const { name, value } = node {
+            consts_map.insert(name.clone(), value.to_string());
+        }
+    }
+    let consts: ConstTable = &consts_map;
+
+    // Build the type environment for arithmetic coercion.
+    let env = TypeEnv::from_spec(spec);
+
+    let mut constants = Vec::new();
+
+    for Node { node, .. } in &spec.items {
+        match node {
+            TopItem::Const { name, value } => {
+                constants.push((name.clone(), value.to_string()));
+            }
+            TopItem::Record(r) => {
+                out.records.push(ParsedRecordType {
+                    name: r.name.clone(),
+                    fields: r
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), type_ref_to_string(&f.ty)))
+                        .collect(),
+                });
+            }
+            TopItem::Adt(adt) => {
+                // Error ADT: populate error_codes / valued_errors.
+                if adt.name == "Error" {
+                    for v in &adt.variants {
+                        out.error_codes.push(v.name.clone());
+                        if v.code.is_some() || v.description.is_some() {
+                            out.valued_errors.push(ParsedErrorCode {
+                                name: v.name.clone(),
+                                value: v.code,
+                                description: v.description.clone(),
+                            });
+                        }
+                    }
+                } else if is_map_value_sum_type(&adt.name, spec) {
+                    // Real sum type used as a Map value → emit as proper Lean
+                    // `inductive` later; preserve variant structure here.
+                    let variants = adt
+                        .variants
+                        .iter()
+                        .map(|v| ParsedVariant {
+                            name: v.name.clone(),
+                            fields: v
+                                .fields
+                                .iter()
+                                .map(|f| (f.name.clone(), type_ref_to_string(&f.ty)))
+                                .collect(),
+                        })
+                        .collect();
+                    out.sum_types.push(ParsedSumType {
+                        name: adt.name.clone(),
+                        variants,
+                    });
+                } else {
+                    // State-ish ADT: collect lifecycle from variant names,
+                    // fields from the payload-carrying variant(s). Flattened
+                    // representation matches existing transition codegen.
+                    let lifecycle: Vec<String> =
+                        adt.variants.iter().map(|v| v.name.clone()).collect();
+                    // B1 (v2.6): flatten variant fields into the state-field
+                    // list BUT deduplicate by name. Before this, each variant
+                    // contributed the full record to `fields`, producing e.g.
+                    //     struct State {
+                    //         pool: u64, status: u8,
+                    //         pool: u64, status: u8,   // duplicate from Frozen
+                    //         pool: u64, status: u8,   // duplicate from Settled
+                    //     }
+                    // in the Kani harness — invalid Rust. First occurrence
+                    // wins on name collision (variants usually share the same
+                    // field shape). If two variants declare the same field
+                    // name with different types, the downstream `check.rs`
+                    // lint surfaces the mismatch. Proper enum+match codegen
+                    // is tracked separately (release notes).
+                    let mut fields: Vec<(String, String)> = Vec::new();
+                    let mut seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for variant in &adt.variants {
+                        for f in &variant.fields {
+                            if seen.insert(f.name.clone()) {
+                                fields.push((f.name.clone(), type_ref_to_string(&f.ty)));
+                            }
+                        }
+                    }
+                    out.account_types.push(ParsedAccountType {
+                        name: adt.name.clone(),
+                        fields,
+                        lifecycle,
+                        pda_ref: None,
+                    });
+                }
+            }
+            TopItem::Handler(h) => {
+                // If the handler has a `match` clause, expand into one
+                // synthetic handler per arm. Otherwise, single handler.
+                let expanded = expand_handler(h, consts, &env);
+                out.handlers.extend(expanded);
+            }
+            TopItem::Property(p) => {
+                let lean = expr_to_lean(&p.body.node, Ctx::Guard, consts, &env);
+                let rust = expr_to_rust(&p.body.node, Ctx::Guard, consts, opts_native(&env));
+                let rust_pod = expr_to_rust(&p.body.node, Ctx::Guard, consts, opts_pod(&env));
+                let preserved = match &p.preserved_by {
+                    // `preserved_by all` — kept as the sentinel "all".
+                    // Expanded to the full handler-name list below after all
+                    // handlers are known (matches pest parity).
+                    a::PreservedBy::All => vec!["all".to_string()],
+                    a::PreservedBy::Some(xs) => xs.clone(),
+                };
+                // When the body is a single `forall <binder> : <T>, inner`
+                // with a binder type wider than U8/I8 (so the standard
+                // proptest lowering would emit the unsupported sentinel),
+                // also render the inner body keeping the binder as a free
+                // Rust variable. proptest_gen uses this to emit per-slot
+                // `_at` predicates and have preservation tests for handlers
+                // taking the binder as a param check at that slot.
+                let per_slot = match &p.body.node {
+                    Expr::Quant {
+                        kind: a::Quantifier::Forall,
+                        binder,
+                        binder_ty,
+                        body,
+                    } if !matches!(binder_ty.as_str(), "U8" | "I8") => {
+                        let body_rust =
+                            expr_to_rust(&body.node, Ctx::Guard, consts, opts_native(&env));
+                        // Only useful if the body itself rendered without any
+                        // further unsupported quantifier — nested wide forall
+                        // can't be flattened to a single per-slot param.
+                        if !crate::check::rust_expr_is_unsupported(&body_rust) {
+                            Some(crate::check::PerSlotForm {
+                                binder_name: binder.clone(),
+                                binder_type: binder_ty.clone(),
+                                rust_body: body_rust,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                out.properties.push(ParsedProperty {
+                    name: p.name.clone(),
+                    expression: Some(lean),
+                    rust_expression: Some(rust),
+                    rust_expression_pod: Some(rust_pod),
+                    preserved_by: preserved,
+                    per_slot,
+                });
+            }
+            TopItem::Cover(c) => {
+                out.covers.push(ParsedCover {
+                    name: c.name.clone(),
+                    traces: c.traces.clone(),
+                    reachable: c
+                        .reachable
+                        .iter()
+                        .map(|(op, when)| {
+                            (
+                                op.clone(),
+                                when.as_ref()
+                                    .map(|e| expr_to_lean(&e.node, Ctx::Guard, consts, &env)),
+                            )
+                        })
+                        .collect(),
+                });
+            }
+            TopItem::Liveness(l) => {
+                // Strip the type prefix: `State.Active` → `Active`.
+                // Legacy code consumes the bare variant name.
+                let last = |q: &crate::ast::QualifiedPath| -> String {
+                    q.0.last().cloned().unwrap_or_default()
+                };
+                out.liveness_props.push(ParsedLiveness {
+                    name: l.name.clone(),
+                    from_state: last(&l.from_state),
+                    leads_to_state: last(&l.to_state),
+                    via_ops: l.via.clone(),
+                    within_steps: Some(l.within),
+                });
+            }
+            TopItem::Invariant(i) => {
+                let parsed = match &i.body {
+                    a::InvariantBody::Expr(e) => {
+                        let lean = expr_to_lean(&e.node, Ctx::Guard, consts, &env);
+                        let rust =
+                            crate::rust_codegen_util::translate_property_to_rust(&lean, false);
+                        crate::check::ParsedInvariant {
+                            name: i.name.clone(),
+                            doc: String::new(),
+                            lean_expr: Some(lean),
+                            rust_expr: Some(rust),
+                        }
+                    }
+                    a::InvariantBody::Description(s) => crate::check::ParsedInvariant {
+                        name: i.name.clone(),
+                        doc: s.clone(),
+                        lean_expr: None,
+                        rust_expr: None,
+                    },
+                };
+                out.invariants.push(parsed);
+            }
+            TopItem::Pda(p) => {
+                let seeds: Vec<String> = p
+                    .seeds
+                    .iter()
+                    .map(|s| match s {
+                        a::PdaSeed::Literal(lit) => format!("\"{}\"", lit),
+                        a::PdaSeed::Ident(id) => id.clone(),
+                    })
+                    .collect();
+                out.pdas.push(ParsedPda {
+                    name: p.name.clone(),
+                    seeds,
+                });
+            }
+            TopItem::Event(ev) => {
+                out.events.push(ParsedEvent {
+                    name: ev.name.clone(),
+                    fields: ev
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), type_ref_to_string(&f.ty)))
+                        .collect(),
+                });
+            }
+            TopItem::TypeAlias(ta) => {
+                out.type_aliases
+                    .push((ta.name.clone(), type_ref_to_string(&ta.target)));
+            }
+            TopItem::ProgramId(pid) => {
+                out.program_id = Some(pid.clone());
+            }
+            TopItem::Pubkey(p) => {
+                out.pubkeys.push(ParsedPubkey {
+                    name: p.name.clone(),
+                    chunks: p.chunks.iter().map(|c| c.to_string()).collect(),
+                });
+            }
+            TopItem::Errors(entries) => {
+                // Mirror ADT-Error behavior: populate error_codes and valued_errors.
+                for e in entries {
+                    out.error_codes.push(e.name.clone());
+                    if e.code.is_some() || e.description.is_some() {
+                        out.valued_errors.push(ParsedErrorCode {
+                            name: e.name.clone(),
+                            value: e.code,
+                            description: e.description.clone(),
+                        });
+                    }
+                }
+            }
+            TopItem::Instruction(instr) => {
+                out.instructions.push(adapt_instruction(instr, consts));
+            }
+            TopItem::Environment(envd) => {
+                let mut mutates: Vec<(String, String)> = Vec::new();
+                let mut constraints_lean: Vec<String> = Vec::new();
+                let mut constraints_rust: Vec<String> = Vec::new();
+                for Node { node: c, .. } in &envd.clauses {
+                    match c {
+                        a::EnvClause::Mutates { field, ty } => {
+                            mutates.push((field.clone(), ty.clone()));
+                        }
+                        a::EnvClause::Constraint(e) => {
+                            constraints_lean.push(expr_to_lean(
+                                &e.node,
+                                Ctx::Ensures,
+                                consts,
+                                &env,
+                            ));
+                            constraints_rust.push(expr_to_rust(
+                                &e.node,
+                                Ctx::Ensures,
+                                consts,
+                                opts_native(&env),
+                            ));
+                        }
+                    }
+                }
+                out.environments.push(ParsedEnvironment {
+                    name: envd.name.clone(),
+                    mutates,
+                    constraints: constraints_lean,
+                    constraints_rust,
+                });
+            }
+            TopItem::Interface(iface) => {
+                out.interfaces.push(adapt_interface(iface, consts, &env));
+            }
+            TopItem::Import {
+                name,
+                from,
+                as_name,
+            } => {
+                out.imports.push(ParsedImport {
+                    name: name.clone(),
+                    from: from.clone(),
+                    as_name: as_name.clone(),
+                });
+            }
+            TopItem::Pragma(p) => {
+                // Record the pragma name for target inference. Any given
+                // pragma may appear at most once per spec; duplicates are
+                // flagged at lint time, not here.
+                out.pragmas.push(p.name.clone());
+
+                // Inline-adapt each nested item. The parser restricts pragma
+                // bodies to a whitelist (const/pubkey/assembly/instruction/
+                // errors), so only those cases matter.
+                for Node { node: inner, .. } in &p.items {
+                    match inner {
+                        TopItem::Const { name, value } => {
+                            constants.push((name.clone(), value.to_string()));
+                        }
+                        TopItem::Pubkey(pk) => {
+                            out.pubkeys.push(ParsedPubkey {
+                                name: pk.name.clone(),
+                                chunks: pk.chunks.iter().map(|c| c.to_string()).collect(),
+                            });
+                        }
+                        TopItem::Instruction(instr) => {
+                            out.instructions.push(adapt_instruction(instr, consts));
+                        }
+                        TopItem::Errors(entries) => {
+                            for e in entries {
+                                out.error_codes.push(e.name.clone());
+                                if e.code.is_some() || e.description.is_some() {
+                                    out.valued_errors.push(ParsedErrorCode {
+                                        name: e.name.clone(),
+                                        value: e.code,
+                                        description: e.description.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        // Grammar already rejects non-whitelisted items; this
+                        // arm is defensive and silently ignores anything that
+                        // slipped through (would indicate a grammar bug).
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Expand `preserved_by all` to the full handler-name list (pest parity).
+    let all_handler_names: Vec<String> = out.handlers.iter().map(|h| h.name.clone()).collect();
+    for prop in &mut out.properties {
+        if prop.preserved_by.len() == 1 && prop.preserved_by[0] == "all" {
+            prop.preserved_by = all_handler_names.clone();
+        }
+    }
+
+    // Link account_types to PDAs by case-insensitive name match (pest parity).
+    for acct in &mut out.account_types {
+        if acct.pda_ref.is_none() {
+            let lower = acct.name.to_lowercase();
+            if let Some(pda) = out.pdas.iter().find(|p| p.name.to_lowercase() == lower) {
+                acct.pda_ref = Some(pda.name.clone());
+            }
+        }
+    }
+
+    if let Some(first) = out.account_types.first() {
+        out.state_fields = first.fields.clone();
+        out.lifecycle_states = first.lifecycle.clone();
+    }
+
+    out.constants = constants;
+    // F5: collect uninterpreted helpers after all other fields are
+    // populated — the collector needs the full state_fields + records
+    // + sum_types picture to infer argument types.
+    out.uninterpreted_helpers = collect_uninterpreted_helpers(spec, &out);
+    out
+}
+
+/// Expand a handler declaration into one or more `ParsedHandler`s.
+/// Handlers without a `branch` clause produce exactly one. Handlers with
+/// branches produce one synthetic handler per arm, each carrying the
+/// parent's auth/accounts/requires plus the arm's guard and body.
+fn expand_handler(
+    h: &a::HandlerDecl,
+    consts: ConstTable,
+    base_env: &TypeEnv,
+) -> Vec<ParsedHandler> {
+    // Per-handler env carries the handler's params for bare-ident lookup.
+    let env = TypeEnv {
+        state_fields: base_env.state_fields.clone(),
+        records: base_env.records.clone(),
+        params: h.params.iter().map(|f| (f.name.clone(), &f.ty)).collect(),
+    };
+    let env = &env;
+    // Detect a single branch clause (phase 1: at most one branch per handler).
+    let match_clause: Option<&a::MatchClause> = h.clauses.iter().find_map(|c| match &c.node {
+        a::HandlerClause::Match(b) => Some(b),
+        _ => None,
+    });
+
+    let Some(branch) = match_clause else {
+        return vec![adapt_handler(h, consts, env)];
+    };
+
+    // Build a shared base handler (parent without the branch clause).
+    let base = adapt_handler(h, consts, env);
+
+    // Accumulate negated guards so that earlier arms' failure implies
+    // later arms' precondition (first-match semantics). Triple is
+    // (lean, rust_native, rust_pod).
+    let mut prior_conds: Vec<(String, String, String)> = Vec::new();
+    let mut out = Vec::with_capacity(branch.arms.len());
+
+    for arm in &branch.arms {
+        let mut synth = base.clone();
+        synth.name = format!("{}_{}", h.name, arm.label);
+
+        // Add all prior-arm negations to this arm's requires.
+        for (lean_neg, rust_neg, rust_pod_neg) in &prior_conds {
+            synth.requires.push(ParsedRequires {
+                lean_expr: lean_neg.clone(),
+                rust_expr: rust_neg.clone(),
+                rust_expr_pod: rust_pod_neg.clone(),
+                error_name: None,
+            });
+        }
+
+        // Current arm's guard (if any) becomes a requires; negation is
+        // recorded for subsequent arms.
+        if let Some(guard) = &arm.guard {
+            let lean = expr_to_lean(&guard.node, Ctx::Guard, consts, env);
+            let rust = expr_to_rust(&guard.node, Ctx::Guard, consts, opts_native(env));
+            let rust_pod = expr_to_rust(&guard.node, Ctx::Guard, consts, opts_pod(env));
+            synth.requires.push(ParsedRequires {
+                lean_expr: lean.clone(),
+                rust_expr: rust.clone(),
+                rust_expr_pod: rust_pod.clone(),
+                error_name: None,
+            });
+            prior_conds.push((
+                format!("\u{00AC}({})", lean),
+                format!("!({})", rust),
+                format!("!({})", rust_pod),
+            ));
+        }
+
+        // Arm body: abort → additional aborting requires; effect → effects
+        match &arm.body {
+            a::MatchBody::Abort(err) => {
+                // Aborting case: synth is guaranteed to fail if its arm fires.
+                // Express as `requires false else <err>` so the handler aborts
+                // when reached. The `false` is written as `0 == 1` for
+                // downstream simplicity (no dedicated False literal).
+                synth.requires.push(ParsedRequires {
+                    lean_expr: "0 = 1".to_string(),
+                    rust_expr: "false".to_string(),
+                    rust_expr_pod: "false".to_string(),
+                    error_name: Some(err.clone()),
+                });
+            }
+            a::MatchBody::Effect(stmts) => {
+                for Node { node: stmt, .. } in stmts {
+                    synth
+                        .effects
+                        .push(render_effect(stmt, &base.takes_params, consts));
+                }
+            }
+            a::MatchBody::Noop => {}
+        }
+
+        out.push(synth);
+    }
+
+    out
+}
+
+fn adapt_handler(h: &a::HandlerDecl, consts: ConstTable, env: &TypeEnv) -> ParsedHandler {
+    let params: Vec<(String, String)> = h
+        .params
+        .iter()
+        .map(|p| (p.name.clone(), type_ref_to_string(&p.ty)))
+        .collect();
+
+    // `on_account` is the type prefix of the pre-state ref, if qualified.
+    //   `Loan.Active` → on_account = Some("Loan"), pre_status = Some("Active")
+    //   `Active`      → on_account = None,         pre_status = Some("Active")
+    let on_account = h.pre.as_ref().and_then(|p| {
+        if p.0.len() >= 2 {
+            p.0.get(p.0.len() - 2).cloned()
+        } else {
+            None
+        }
+    });
+
+    let mut handler = ParsedHandler {
+        name: h.name.clone(),
+        doc: h.doc.clone(),
+        who: None,
+        on_account,
+        pre_status: h.pre.as_ref().and_then(|p| p.0.last().cloned()),
+        post_status: h.post.as_ref().and_then(|p| p.0.last().cloned()),
+        takes_params: params.clone(),
+        guard_str: None,
+        guard_str_rust: None,
+        aborts_if: Vec::new(),
+        requires: Vec::new(),
+        ensures: Vec::new(),
+        modifies: None,
+        let_bindings: Vec::new(),
+        aborts_total: false,
+        permissionless: false,
+        effects: Vec::new(),
+        accounts: Vec::new(),
+        transfers: Vec::new(),
+        emits: Vec::new(),
+        invariants: Vec::new(),
+        properties: Vec::new(),
+        calls: Vec::new(),
+    };
+
+    for Node { node: clause, .. } in &h.clauses {
+        match clause {
+            a::HandlerClause::Auth(actor) => handler.who = Some(actor.clone()),
+            a::HandlerClause::Accounts(descs) => {
+                for d in descs {
+                    let mut acc = ParsedHandlerAccount {
+                        name: d.name.clone(),
+                        is_signer: false,
+                        is_writable: false,
+                        is_program: false,
+                        pda_seeds: None,
+                        account_type: None,
+                        authority: None,
+                    };
+                    for attr in &d.attrs {
+                        match attr {
+                            a::AccountAttr::Simple(s) => match s.as_str() {
+                                "signer" => acc.is_signer = true,
+                                "writable" => acc.is_writable = true,
+                                "readonly" => acc.is_writable = false,
+                                "program" => acc.is_program = true,
+                                _ => acc.account_type = Some(s.clone()),
+                            },
+                            a::AccountAttr::Type(t) => acc.account_type = Some(t.clone()),
+                            a::AccountAttr::Authority(x) => acc.authority = Some(x.clone()),
+                            a::AccountAttr::Pda(seeds) => acc.pda_seeds = Some(seeds.clone()),
+                        }
+                    }
+                    handler.accounts.push(acc);
+                }
+            }
+            a::HandlerClause::Requires { guard, on_fail } => {
+                handler.requires.push(ParsedRequires {
+                    lean_expr: expr_to_lean(&guard.node, Ctx::Guard, consts, env),
+                    rust_expr: expr_to_rust(&guard.node, Ctx::Guard, consts, opts_native(env)),
+                    rust_expr_pod: expr_to_rust(&guard.node, Ctx::Guard, consts, opts_pod(env)),
+                    error_name: on_fail.clone(),
+                });
+            }
+            a::HandlerClause::Ensures(e) => {
+                handler.ensures.push(ParsedEnsures {
+                    lean_expr: expr_to_lean(&e.node, Ctx::Ensures, consts, env),
+                    rust_expr: expr_to_rust(&e.node, Ctx::Ensures, consts, opts_native(env)),
+                    rust_expr_pod: expr_to_rust(&e.node, Ctx::Ensures, consts, opts_pod(env)),
+                });
+            }
+            a::HandlerClause::Modifies(fs) => {
+                handler.modifies = Some(fs.clone());
+            }
+            a::HandlerClause::Let { name, value } => {
+                handler.let_bindings.push((
+                    name.clone(),
+                    expr_to_lean(&value.node, Ctx::Guard, consts, env),
+                    expr_to_rust(&value.node, Ctx::Guard, consts, opts_native(env)),
+                ));
+            }
+            a::HandlerClause::Effect(stmts) => {
+                for Node { node: stmt, .. } in stmts {
+                    handler.effects.push(render_effect(stmt, &params, consts));
+                }
+            }
+            a::HandlerClause::Takes(fields) => {
+                // Legacy sugar — append to takes_params.
+                for f in fields {
+                    handler
+                        .takes_params
+                        .push((f.name.clone(), type_ref_to_string(&f.ty)));
+                }
+            }
+            a::HandlerClause::Transfers(clauses) => {
+                for tc in clauses {
+                    let amount = tc.amount.as_ref().map(|a| match a {
+                        crate::ast::TransferAmount::Literal(v) => v.to_string(),
+                        crate::ast::TransferAmount::Path(p) => {
+                            // Pest captures amount as raw ident source — emit plain path.
+                            let mut s = p.root.clone();
+                            for seg in &p.segments {
+                                match seg {
+                                    crate::ast::PathSeg::Field(f) => {
+                                        s.push('.');
+                                        s.push_str(f);
+                                    }
+                                    crate::ast::PathSeg::Index(i) => {
+                                        s.push('[');
+                                        s.push_str(i);
+                                        s.push(']');
+                                    }
+                                }
+                            }
+                            s
+                        }
+                    });
+                    handler.transfers.push(crate::check::ParsedTransfer {
+                        from: tc.from.clone(),
+                        to: tc.to.clone(),
+                        amount,
+                        authority: tc.authority.clone(),
+                    });
+                }
+            }
+            a::HandlerClause::Emits(ev) => handler.emits.push(ev.clone()),
+            a::HandlerClause::AbortsTotal => handler.aborts_total = true,
+            a::HandlerClause::Permissionless => handler.permissionless = true,
+            a::HandlerClause::Invariant(name) => handler.invariants.push(name.clone()),
+            a::HandlerClause::Include(_) => {
+                // Schema includes: forward-compat; ignored in phase 1.
+            }
+            a::HandlerClause::Match(_) => {
+                // Branches are expanded into synthetic handlers by
+                // `expand_handler`; this function only builds the shared
+                // base and must ignore the branch clause itself.
+            }
+            a::HandlerClause::Call(c) => {
+                // Split `Interface.handler` from the qualified path. Longer
+                // paths (unusual — e.g. nested namespacing) flatten with '.'
+                // into the handler name so the call still records, and the
+                // resolver (slice 4+) can decide what to do.
+                let segs = &c.target.0;
+                let (iface, handler_name) = match segs.as_slice() {
+                    [] => (String::new(), String::new()),
+                    [only] => (String::new(), only.clone()),
+                    [head, tail @ ..] => (head.clone(), tail.join(".")),
+                };
+                let args = c
+                    .args
+                    .iter()
+                    .map(|arg| ParsedCallArg {
+                        name: arg.name.clone(),
+                        lean_expr: expr_to_lean(&arg.value.node, Ctx::Guard, consts, env),
+                        rust_expr: expr_to_rust(
+                            &arg.value.node,
+                            Ctx::Guard,
+                            consts,
+                            opts_native(env),
+                        ),
+                        rust_expr_pod: expr_to_rust(
+                            &arg.value.node,
+                            Ctx::Guard,
+                            consts,
+                            opts_pod(env),
+                        ),
+                    })
+                    .collect();
+                handler.calls.push(ParsedCall {
+                    target_interface: iface,
+                    target_handler: handler_name,
+                    args,
+                });
+            }
+        }
+    }
+
+    handler
+}
+
+// ----------------------------------------------------------------------------
+// Interface adaptation
+// ----------------------------------------------------------------------------
+
+fn adapt_interface<'a>(
+    iface: &'a a::InterfaceDecl,
+    consts: ConstTable<'a>,
+    env: &TypeEnv<'a>,
+) -> ParsedInterface {
+    let handlers = iface
+        .handlers
+        .iter()
+        .map(|h| adapt_interface_handler(h, consts, env))
+        .collect();
+    ParsedInterface {
+        name: iface.name.clone(),
+        doc: iface.doc.clone(),
+        program_id: iface.program_id.clone(),
+        upstream: iface.upstream.as_ref().map(|u| ParsedUpstream {
+            package: u.package.clone(),
+            version: u.version.clone(),
+            source: u.source.clone(),
+            binary_hash: u.binary_hash.clone(),
+            idl_hash: u.idl_hash.clone(),
+            verified_with: u.verified_with.clone(),
+            verified_at: u.verified_at.clone(),
+        }),
+        handlers,
+    }
+}
+
+fn adapt_interface_handler<'a>(
+    h: &'a a::InterfaceHandlerDecl,
+    consts: ConstTable<'a>,
+    env: &TypeEnv<'a>,
+) -> ParsedInterfaceHandler {
+    let mut out = ParsedInterfaceHandler {
+        name: h.name.clone(),
+        doc: h.doc.clone(),
+        params: h
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), type_ref_to_string(&p.ty)))
+            .collect(),
+        discriminant: None,
+        accounts: Vec::new(),
+        requires: Vec::new(),
+        ensures: Vec::new(),
+    };
+
+    for Node { node: clause, .. } in &h.clauses {
+        match clause {
+            a::InterfaceHandlerClause::Discriminant(s) => {
+                out.discriminant = Some(s.clone());
+            }
+            a::InterfaceHandlerClause::Accounts(descs) => {
+                for d in descs {
+                    let mut acc = ParsedHandlerAccount {
+                        name: d.name.clone(),
+                        is_signer: false,
+                        is_writable: false,
+                        is_program: false,
+                        pda_seeds: None,
+                        account_type: None,
+                        authority: None,
+                    };
+                    for attr in &d.attrs {
+                        match attr {
+                            a::AccountAttr::Simple(s) => match s.as_str() {
+                                "signer" => acc.is_signer = true,
+                                "writable" => acc.is_writable = true,
+                                "readonly" => acc.is_writable = false,
+                                "program" => acc.is_program = true,
+                                _ => acc.account_type = Some(s.clone()),
+                            },
+                            a::AccountAttr::Type(t) => acc.account_type = Some(t.clone()),
+                            a::AccountAttr::Authority(x) => acc.authority = Some(x.clone()),
+                            a::AccountAttr::Pda(seeds) => acc.pda_seeds = Some(seeds.clone()),
+                        }
+                    }
+                    out.accounts.push(acc);
+                }
+            }
+            a::InterfaceHandlerClause::Requires { guard, on_fail } => {
+                out.requires.push(ParsedRequires {
+                    lean_expr: expr_to_lean(&guard.node, Ctx::Guard, consts, env),
+                    rust_expr: expr_to_rust(&guard.node, Ctx::Guard, consts, opts_native(env)),
+                    rust_expr_pod: expr_to_rust(&guard.node, Ctx::Guard, consts, opts_pod(env)),
+                    error_name: on_fail.clone(),
+                });
+            }
+            a::InterfaceHandlerClause::Ensures(e) => {
+                out.ensures.push(ParsedEnsures {
+                    lean_expr: expr_to_lean(&e.node, Ctx::Ensures, consts, env),
+                    rust_expr: expr_to_rust(&e.node, Ctx::Ensures, consts, opts_native(env)),
+                    rust_expr_pod: expr_to_rust(&e.node, Ctx::Ensures, consts, opts_pod(env)),
+                });
+            }
+        }
+    }
+
+    out
+}
+
+// ============================================================================
+// Tests — parity with pest on percolator.qedspec
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PERCOLATOR_SPEC: &str =
+        include_str!("../../../examples/rust/percolator/percolator.qedspec");
+
+    // Issue #8 finding #7 regression. Pubkey := <int> must be
+    // rejected at check time, not deferred to lake build's
+    // "OfNat Pubkey 0" error.
+    #[test]
+    fn finding_7_pubkey_assign_from_int_rejected() {
+        let src = include_str!(
+            "../../../examples/regressions/issue-8/repro-07-pubkey-literal-assign.qedspec"
+        );
+        let err = parse_str(src).expect_err("expected Pubkey := 0 to fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Pubkey field cannot be assigned a numeric literal"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    // Issue #8 finding #8 regression. state.<Pubkey> != <int> in a
+    // `requires` clause must also be rejected.
+    #[test]
+    fn finding_8_pubkey_compare_with_int_rejected() {
+        let src = include_str!(
+            "../../../examples/regressions/issue-8/repro-08-pubkey-literal-compare.qedspec"
+        );
+        let err = parse_str(src).expect_err("expected state.key != 0 to fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("compares Pubkey"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn finding_7_pubkey_assign_from_numeric_const_rejected() {
+        let src = r#"spec Repro7Const
+program_id "11111111111111111111111111111111"
+const ZERO = 0
+type State
+  | Uninitialized
+  | Active of { key : Pubkey }
+type Error | E
+handler h : State.Uninitialized -> State.Active {
+  permissionless
+  effect { key := ZERO }
+}
+"#;
+        let err = parse_str(src).expect_err("expected key := ZERO to fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Pubkey field cannot be assigned a numeric literal"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn finding_8_pubkey_compare_with_numeric_const_rejected() {
+        let src = r#"spec Repro8Const
+program_id "11111111111111111111111111111111"
+const ZERO = 0
+type State
+  | Uninitialized
+  | Active of { key : Pubkey }
+type Error | E
+handler h : State.Active -> State.Active {
+  permissionless
+  requires state.key != ZERO else E
+  effect { }
+}
+"#;
+        let err = parse_str(src).expect_err("expected state.key != ZERO to fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("compares Pubkey"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn pubkey_param_paths_remain_allowed_with_numeric_consts_present() {
+        let src = r#"spec ReproConstGuard
+program_id "11111111111111111111111111111111"
+const ZERO = 0
+type State
+  | Uninitialized
+  | Active of { key : Pubkey }
+type Error | E
+handler h (k : Pubkey) : State.Active -> State.Active {
+  permissionless
+  requires state.key != k else E
+  effect { key := k }
+}
+"#;
+        parse_str(src).expect("Pubkey param assignment/comparison should remain valid");
+    }
+
+    // Guard: bundled specs that legitimately compare/assign Pubkey
+    // must not regress (e.g. `signer == state.admin`, `state.pk := p`).
+    #[test]
+    fn pubkey_typecheck_does_not_break_bundled_examples() {
+        for src in [
+            include_str!("../../../examples/rust/escrow/escrow.qedspec"),
+            include_str!("../../../examples/rust/lending/lending.qedspec"),
+            include_str!("../../../examples/rust/multisig/multisig.qedspec"),
+            include_str!("../../../examples/rust/percolator/percolator.qedspec"),
+            include_str!("../../../examples/regressions/issue-8/pool.qedspec"),
+        ] {
+            parse_str(src).unwrap();
+        }
+    }
+
+    // Structural smoke test — percolator produces the shape we expect.
+    // When pest existed this compared parser-for-parser; now it's a
+    // regression fence against future adapter changes.
+    #[test]
+    fn percolator_shape() {
+        let spec = parse_str(PERCOLATOR_SPEC).expect("chumsky parse");
+        // 14 plain handlers + `liquidate` expanded into 3 branch arms = 17.
+        assert_eq!(spec.handlers.len(), 17);
+        assert_eq!(spec.properties.len(), 3);
+        assert_eq!(spec.covers.len(), 2);
+        assert_eq!(spec.liveness_props.len(), 1);
+
+        let deposit = spec.handlers.iter().find(|h| h.name == "deposit").unwrap();
+        assert_eq!(deposit.requires.len(), 2);
+        assert_eq!(
+            deposit.requires[0].error_name,
+            Some("SlotInactive".to_string())
+        );
+
+        // Const substitution in guards: MAX_VAULT_TVL should be inlined.
+        assert!(deposit.requires[1].lean_expr.contains("10000000000000000"));
+    }
+
+    // B1 regression: ADTs with multiple variants sharing the same field
+    // names must produce a SINGLE entry per field (first-variant wins), not
+    // a struct with N copies of each field.
+    #[test]
+    fn adt_variants_with_shared_fields_deduplicate() {
+        let src = r#"spec T
+type Battle
+  | Active  of { pool : U64, status : U8 }
+  | Frozen  of { pool : U64, status : U8 }
+  | Settled of { pool : U64, status : U8 }
+"#;
+        let spec = parse_str(src).expect("parse");
+        assert_eq!(spec.account_types.len(), 1);
+        let at = &spec.account_types[0];
+        assert_eq!(at.name, "Battle");
+        // Pre-fix: fields.len() == 6 (3 variants × 2 fields, flattened).
+        assert_eq!(
+            at.fields.len(),
+            2,
+            "shared-field variants must dedupe to 2 fields, got {:?}",
+            at.fields
+        );
+        let names: Vec<&str> = at.fields.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["pool", "status"]);
+        // Lifecycle retains every variant name (Active/Frozen/Settled) for
+        // Status enum generation.
+        assert_eq!(at.lifecycle, vec!["Active", "Frozen", "Settled"]);
+    }
+
+    // B12 regression: property bodies referencing `state.x` must render as
+    // `s.x` in the Rust form — `s` is the function parameter that
+    // `emit_property_predicates` binds. Pre-v2.6.1 the Rust form was
+    // `state.x >= 0`, which failed to compile (`cannot find value 'state'`).
+    #[test]
+    fn property_state_root_renders_as_s_in_rust() {
+        let src = r#"spec T
+state { x : U64 }
+property x_bounded :
+  state.x >= 0
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "x_bounded")
+            .expect("property");
+        let rust = prop.rust_expression.as_deref().expect("rust rendering");
+        assert!(
+            rust.contains("s.x"),
+            "state.x should render as s.x, got: {}",
+            rust
+        );
+        assert!(
+            !rust.contains("state."),
+            "no residual `state.` prefix in rust form: {}",
+            rust
+        );
+    }
+
+    // B2 regression: `implies` and `forall` must not leak Unicode symbols into
+    // the Rust rendering of a property body.
+    #[test]
+    fn property_implies_renders_to_valid_rust() {
+        let src = r#"spec T
+state { x : U8 }
+property implies_case :
+  state.x == 2 implies state.x >= 2
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "implies_case")
+            .expect("property");
+        let rust = prop.rust_expression.as_deref().expect("rust rendering");
+        // No lingering Lean arrows that would mojibake as `â` in downstream Rust.
+        assert!(!rust.contains('\u{2192}'), "rust form has → : {}", rust);
+        // Explicit desugaring check: `implies` must lower to `!(…) || (…)`.
+        assert!(rust.contains("!("), "expected negation in: {}", rust);
+        assert!(rust.contains("||"), "expected disjunction in: {}", rust);
+        assert!(
+            !crate::check::rust_expr_is_unsupported(rust),
+            "implies should lower, not be marked unsupported: {}",
+            rust
+        );
+    }
+
+    #[test]
+    fn property_forall_u8_lowers_to_iterator() {
+        // U8 is small enough to exhaust (256 values) — must not emit the
+        // unsupported sentinel; must lower to a `.all(|v| …)` expression.
+        let src = r#"spec T
+state { x : U8 }
+property forall_case :
+  forall v : U8, v >= 0
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "forall_case")
+            .expect("property");
+        let rust = prop.rust_expression.as_deref().expect("rust rendering");
+        assert!(
+            !crate::check::rust_expr_is_unsupported(rust),
+            "U8 forall must lower to an iterator, not emit the unsupported marker: {}",
+            rust
+        );
+        assert!(
+            rust.contains("u8::MIN") && rust.contains("u8::MAX"),
+            "must use u8 range: {}",
+            rust
+        );
+        assert!(rust.contains(".all("), "must use .all(): {}", rust);
+        assert!(
+            !rust.contains('\u{2200}'),
+            "rust must not contain ∀: {}",
+            rust
+        );
+    }
+
+    #[test]
+    fn property_forall_large_type_marked_unsupported_in_rust() {
+        // U64 cannot be exhausted in a test loop — must still emit the sentinel.
+        let src = r#"spec T
+state { x : U64 }
+property forall_u64 :
+  forall v : U64, v >= 0
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "forall_u64")
+            .expect("property");
+        let rust = prop.rust_expression.as_deref().expect("rust rendering");
+        assert!(
+            crate::check::rust_expr_is_unsupported(rust),
+            "U64 forall must still emit the unsupported sentinel: {}",
+            rust
+        );
+        assert!(
+            rust.trim_start().starts_with("/*"),
+            "marker must be a Rust block comment: {}",
+            rust
+        );
+        assert!(
+            rust.trim_end().ends_with("*/"),
+            "marker must close the comment: {}",
+            rust
+        );
+        assert!(
+            !rust.contains('\u{2200}'),
+            "rust must not contain ∀: {}",
+            rust
+        );
+    }
+
+    // ----- v2.8 G1: adapter populates ParsedSpec.imports -----
+
+    #[test]
+    fn adapter_populates_imports() {
+        let src = r#"spec T
+import Token from "spl_token"
+import MyAmm from "my_amm"
+"#;
+        let spec = parse_str(src).expect("parse");
+        assert_eq!(spec.imports.len(), 2);
+        assert_eq!(spec.imports[0].name, "Token");
+        assert_eq!(spec.imports[0].from, "spl_token");
+        assert_eq!(spec.imports[1].name, "MyAmm");
+        assert_eq!(spec.imports[1].from, "my_amm");
+    }
+
+    #[test]
+    fn adapter_imports_empty_for_specs_without_import_stmts() {
+        let src = r#"spec T
+type State | A of { x : U64 }
+handler h : State.A -> State.A { effect { x := 1 } }
+"#;
+        let spec = parse_str(src).expect("parse");
+        assert!(spec.imports.is_empty());
+    }
+
+    // ----- v2.8 fold-in F9: if-then-else expressions -----
+
+    #[test]
+    fn if_then_else_renders_to_lean_native_form() {
+        let src = r#"spec T
+type State | A of { x : U64, y : U64 }
+property if_branch :
+  if state.x > 0 then state.y == state.x else state.y == 0
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "if_branch")
+            .expect("property");
+        let lean = prop.expression.as_deref().expect("lean rendering");
+        // Lean's native if-then-else syntax. State fields prefix with `s.`
+        // in Ctx::Guard.
+        assert!(
+            lean.contains("if s.x > 0 then s.y = s.x else s.y = 0"),
+            "expected native Lean if-then-else; got: {}",
+            lean
+        );
+    }
+
+    #[test]
+    fn if_then_else_renders_to_rust_block_form() {
+        let src = r#"spec T
+type State | A of { x : U64, y : U64 }
+property if_branch :
+  if state.x > 0 then state.y == state.x else state.y == 0
+  preserved_by all
+"#;
+        let spec = parse_str(src).expect("parse");
+        let prop = spec
+            .properties
+            .iter()
+            .find(|p| p.name == "if_branch")
+            .unwrap();
+        let rust = prop.rust_expression.as_deref().expect("rust rendering");
+        assert!(
+            rust.contains("if s.x > 0 { s.y == s.x } else { s.y == 0 }"),
+            "expected Rust block-form if-else; got: {}",
+            rust
+        );
+    }
+}

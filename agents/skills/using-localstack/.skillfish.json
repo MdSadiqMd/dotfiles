@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "name": "using-localstack",
+  "owner": "spillwavesolutions",
+  "repo": "using-localstack-plugin",
+  "path": "plugins/using-localstack-plugin/skills/using-localstack",
+  "branch": "main",
+  "sha": "c175746e03472cc40d1193f902746d43595e453f",
+  "source": "manual"
+}
