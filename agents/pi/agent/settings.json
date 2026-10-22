@@ -1,0 +1,15 @@
+{
+  "lastChangelogVersion": "0.84.4",
+  "theme": "github-dark-default",
+  "defaultThinkingLevel": "max",
+  "packages": [
+    "npm:pi-agent-loop",
+    "npm:pi-show-diffs"
+  ],
+  "npmCommand": [
+    "pnpm"
+  ],
+  "defaultProvider": "opencode",
+  "defaultModel": "x-preview-f-free",
+  "hideThinkingBlock": false
+}
