@@ -1,0 +1,13 @@
+[Unit]
+Description=Prevent all sleep including lid-closed (Linux equivalent of pmset disablesleep 1)
+Documentation=https://www.freedesktop.org/software/systemd/man/systemd-inhibit.html
+Before=sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle:handle-lid-switch:handle-lid-switch-docked --who=nosleep --why=Prevent sleep lid closed and idle (pmset disablesleep 1 equivalent) --mode=block /bin/sleep infinity
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
