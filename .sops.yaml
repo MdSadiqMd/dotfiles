@@ -1,0 +1,9 @@
+# Every file in secrets/ is encrypted to this age key (its private half lives in
+# ~/.config/sops/age/keys.txt; a passphrase-encrypted copy is secrets/age-key.age).
+keys:
+  - &main age1ahzxcemx7j9nm75ckz8hx7e4uj89mnrpypwa2tketqdpqr3q9qysg4unje
+creation_rules:
+  - path_regex: secrets/[^/]+\.yaml$
+    key_groups:
+      - age:
+          - *main
