@@ -1,0 +1,16 @@
+modelRoles:
+  default: opencode-zen/nemotron-3-ultra-free:xhigh
+symbolPreset: nerd
+composer:
+  shape: box
+theme:
+  dark: obsidian
+setupVersion: 2
+colorBlindMode: true
+memory:
+  backend: local
+eval:
+  autoBackground:
+    enabled: true
+python:
+  kernelMode: session
