@@ -1,0 +1,26 @@
+[user]
+    email = mohammadsadiq4950@gmail.com
+    name = Md.Sadiq
+	signingkey = 22825064A7120CF50581BBADBDFA0A451C77AD56
+[commit]
+	gpgsign = true
+[tag]
+    gpgSign = true
+
+# Work identity by directory. The include file is generated from vars.workDir
+# (modules/home/links.nix) so this config names no company directory.
+[include]
+  path = ~/.gitconfig.workdir
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+# GitHub over https uses gh's token (sops secret github-token), not the keychain.
+# The empty helper drops the osxkeychain helper git ships with, for these hosts only.
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential

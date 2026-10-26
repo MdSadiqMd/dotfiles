@@ -1,0 +1,10 @@
+[user]
+  name = Sadiq
+
+# The work address is not published: it lives in ~/.gitconfig-work.local, which
+# git includes when present and silently skips when missing.
+[include]
+  path = ~/.gitconfig-work.local
+
+[core]
+  sshCommand = ssh -i ~/.ssh/gitlab_key -o IdentitiesOnly=yes
