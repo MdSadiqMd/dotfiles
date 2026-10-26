@@ -44,7 +44,8 @@ in
   imports = [ inputs.sops-nix.homeManagerModules.sops ];
 
   # secrets/secrets.yaml is committed encrypted. The age key comes from
-  # secrets/age-key.age, unlocked once by bootstrap.sh.
+  # ~/.config/sops/age/keys.txt; bootstrap.sh restores it from the passphrase
+  # backup at ~/.config/sops/age/backup.age, which is never committed.
   sops = {
     age.keyFile = "${home}/.config/sops/age/keys.txt";
     defaultSopsFile = sopsFile;

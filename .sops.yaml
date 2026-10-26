@@ -1,5 +1,6 @@
 # Every file in secrets/ is encrypted to this age key (its private half lives in
-# ~/.config/sops/age/keys.txt; a passphrase-encrypted copy is secrets/age-key.age).
+# ~/.config/sops/age/keys.txt; a passphrase-encrypted backup is kept outside the
+# repo at ~/.config/sops/age/backup.age).
 keys:
   - &main age1ahzxcemx7j9nm75ckz8hx7e4uj89mnrpypwa2tketqdpqr3q9qysg4unje
 creation_rules:

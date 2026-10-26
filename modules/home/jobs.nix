@@ -20,7 +20,7 @@ let
       };
     };
     helmet-comfort-report = {
-      command = "cd ~/Dognosis/vision && monitoring/venv/bin/python monitoring/helmet_comfort_report.py";
+      command = "cd ~/${vars.workDir}/vision && monitoring/venv/bin/python monitoring/helmet_comfort_report.py";
       at = {
         hour = 8;
         minute = 0;
