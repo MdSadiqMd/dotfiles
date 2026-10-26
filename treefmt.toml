@@ -1,0 +1,65 @@
+# `just fmt`. Git-ignored files are skipped automatically. Excluded:
+# vendored, generated and lock files; configs their apps rewrite in their own style
+# (formatting them would flip-flop on every save); zsh (no formatter understands it).
+excludes = [
+  "*.lock",
+  "agents/.skill-lock.json",
+  "agents/AGENTS.md",
+  "agents/claude/commands/**",
+  "agents/claude/hooks/**",
+  "agents/claude/settings.json",
+  "agents/omp/config.yml",
+  "agents/omp/extensions/**",
+  "agents/opencode/*.json*",
+  "agents/opencode/herdr-tui-session.js",
+  "agents/opencode/plugin/**",
+  "agents/opencode/plugins/**",
+  "agents/pi/**",
+  "agents/skills/**",
+  "agents/tools/**",
+  "config/nvim/LICENSE.md",
+  "config/nvim/lazy-lock.json",
+  "config/zed/settings.json",
+  "config/zsh/**",
+]
+
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.shell]
+command = "shfmt"
+options = ["-w", "-i", "2", "-ci"]
+includes = ["*.sh"]
+
+[formatter.lua]
+command = "stylua"
+options = ["--config-path", "config/nvim/.stylua.toml"]
+includes = ["*.lua"]
+
+[formatter.prettier]
+command = "prettier"
+options = ["--write"]
+includes = ["*.json", "*.md", "*.yml", "*.yaml"]
+
+[formatter.toml]
+command = "taplo"
+options = ["format"]
+includes = ["*.toml"]
+
+# No tmux formatter exists; this keeps tmux.conf tidy: no trailing spaces, one blank
+# line between groups, `setw` spelled `set -w`. Rewrites only files that change.
+[formatter.tmux]
+command = "sh"
+options = [
+  "-c",
+  '''
+for f; do
+  awk '{ sub(/[ \t]+$/, ""); sub(/^setw -g /, "set -wg "); sub(/^setw /, "set -w ") }
+    /^$/ { gap = n; next } { if (gap) print ""; gap = 0; n = 1; print }' "$f" >"$f.fmt" &&
+    if cmp -s "$f" "$f.fmt"; then rm "$f.fmt"; else mv "$f.fmt" "$f"; fi
+done
+''',
+  "tmux-fmt",
+]
+includes = ["*tmux.conf"]
