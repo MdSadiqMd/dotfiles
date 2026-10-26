@@ -22,15 +22,6 @@
   "hooks": {
     "PreToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.pre_tool_use",
-            "timeout": 86400
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -38,27 +29,18 @@
             "command": "rtk hook claude"
           }
         ]
-      }
-    ],
-    "SessionEnd": [
+      },
       {
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.session_end"
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.pre_tool_use",
+            "timeout": 86400
           }
         ]
       }
     ],
     "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.session_start"
-          }
-        ]
-      },
       {
         "matcher": "*",
         "hooks": [
@@ -68,14 +50,12 @@
             "timeout": 10
           }
         ]
-      }
-    ],
-    "Stop": [
+      },
       {
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.stop"
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.session_start"
           }
         ]
       }
@@ -85,7 +65,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.subagent_start"
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.subagent_start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.session_end"
           }
         ]
       }
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.user_prompt_submit"
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.user_prompt_submit"
           }
         ]
       }
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.permission_request",
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.permission_request",
             "timeout": 86400
           }
         ]
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 60; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.post_tool_use"
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.post_tool_use"
           }
         ]
       }
@@ -124,7 +124,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api perl -e 'alarm 10; exec @ARGV' $HOME/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.statusline '\"$HOME/.claudemon/statusline.sh\"'"
+    "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.statusline '\"$HOME/.claudemon/statusline.sh\"'"
   },
   "enabledPlugins": {
     "beads@beads-marketplace": true,
