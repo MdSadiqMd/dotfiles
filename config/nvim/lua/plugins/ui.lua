@@ -59,7 +59,9 @@ return {
       -- plain glyphs when there is no Nerd Font (nothing renders as tofu).
       -- NOTE: never put Nerd-Font codepoints here literally; with a font
       -- they come from neo-tree/devicons defaults.
-      local comp = { name = { highlight_opened_files = true } }
+      -- Opened-file highlighting replaces the git color (bold, no fg), so a modified
+      -- file turned white once opened. Like Cursor: names keep their git status color.
+      local comp = { name = { highlight_opened_files = false, use_git_status_colors = true } }
       comp.indent = { with_expanders = true }
       if not nerd then
         comp.indent.expander_collapsed = '▸'
@@ -232,5 +234,27 @@ return {
         marks = { enable = false },
       },
     },
+    config = function(_, opts)
+      -- satellite maps rows to the bar with height * rows / (line_count - 1): a
+      -- one-line buffer divides by zero and every handler errors with `id = nan`.
+      -- ponytail: guards upstream util (unfixed as of 87843c9); drop when it is.
+      local util = require 'satellite.util'
+      local function to_bar(winid, row, row2)
+        local lines0 = util.virtual_line_count(winid, 1) - 1
+        if lines0 < 1 then
+          return 0
+        end
+        return (util.get_winheight(winid) - 1) * util.virtual_line_count(winid, row, row2) / lines0
+      end
+      util.height_to_virtual = function(winid, row, row2)
+        return math.max(1, util.round(to_bar(winid, row, row2)))
+      end
+      util.row_to_barpos = function(winid, row)
+        local v = to_bar(winid, 1, row)
+        local vr = util.round(v)
+        return vr, vr - v
+      end
+      require('satellite').setup(opts)
+    end,
   },
 }

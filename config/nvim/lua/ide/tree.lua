@@ -124,12 +124,37 @@ local function neo_open_side(state, node, how)
   vim.cmd('edit ' .. vim.fn.fnameescape(path))
 end
 
+-- Mouse handlers run scheduled from the dispatcher below, by which time a newer
+-- event may have moved the mouse; they read the position their event arrived with.
+local mouse_pos
+local function mousepos()
+  return mouse_pos or vim.fn.getmousepos()
+end
+
+-- neo-tree saves the selected row on CursorMoved and puts it back on every redraw.
+-- A click that previews or pins leaves the tree before CursorMoved fires, so the
+-- next redraw jumped the highlight back to the old row: save it right away.
+local function set_tree_cursor(win, line)
+  pcall(vim.api.nvim_win_set_cursor, win, { line, 0 })
+  local state = neo_state()
+  if state and state.winid == win then
+    pcall(require('neo-tree.ui.renderer').position.save, state, true)
+  end
+end
+
+-- getmousepos() reports the last line for the empty space below the rows; the tree
+-- never wraps or folds, so a real row satisfies line == topline + winrow - 1.
+local function on_row(m)
+  local info = vim.fn.getwininfo(m.winid)[1]
+  return info ~= nil and m.line >= 1 and m.line == info.topline + m.winrow - 1
+end
+
 -- Clicks must act on the clicked row, not the cursor row. Without this a
 -- click on a file expands the previously-focused folder below it.
 -- Always the release row: a press on one row and release on another is a
 -- sloppy tap, not a drag (text selection is disabled in the tree anyway).
 local function neo_node_at_mouse(state)
-  local m = vim.fn.getmousepos()
+  local m = mousepos()
   if m.winid == 0 then
     return nil
   end
@@ -137,11 +162,11 @@ local function neo_node_at_mouse(state)
   if not ok_buf or vim.bo[buf].filetype ~= 'neo-tree' then
     return nil -- click outside the tree
   end
-  if m.line < 1 or m.line > vim.api.nvim_buf_line_count(buf) then
+  if not on_row(m) then
     return nil -- empty space below the tree: select nothing, open nothing
   end
   pcall(vim.api.nvim_set_current_win, m.winid)
-  pcall(vim.api.nvim_win_set_cursor, m.winid, { m.line, 0 })
+  set_tree_cursor(m.winid, m.line)
   return neo_cursor_node(state)
 end
 
@@ -151,7 +176,7 @@ end
 -- row between press and release, and waiting for release meant the first tap
 -- was swallowed as a "drag". Folders still toggle on release.
 local function neo_record_press(state, do_preview)
-  local m = vim.fn.getmousepos()
+  local m = mousepos()
   neo_press.winid = m.winid
   neo_press.line = m.line
   neo_press.opened = false
@@ -161,10 +186,10 @@ local function neo_record_press(state, do_preview)
     return
   end
   pcall(vim.api.nvim_set_current_win, m.winid)
-  if m.line < 1 or m.line > vim.api.nvim_buf_line_count(buf) then
+  if not on_row(m) then
     return
   end
-  pcall(vim.api.nvim_win_set_cursor, m.winid, { m.line, 0 })
+  set_tree_cursor(m.winid, m.line)
   if not do_preview then
     return
   end
@@ -175,13 +200,6 @@ local function neo_record_press(state, do_preview)
       neo_open_editor(path, false)
       neo_press.opened = true
     end
-  end
-end
-
-local function neo_preview_at_mouse(state)
-  local node = neo_node_at_mouse(state)
-  if node then
-    neo_open_node(state, node, false)
   end
 end
 
@@ -209,16 +227,11 @@ local function neo_side_at_mouse(state)
   end
 end
 
-local function neo_exit_visual_for_click()
-  -- Synchronous (verified `:normal! <Esc>` exits visual immediately).
-  pcall(vim.cmd, 'normal! \27')
-end
-
 -- Hover highlights the hovered row (cursorline follows the mouse) without
 -- opening anything. Only while the tree is focused, so hovering the tree
 -- from the editor never steals the selection.
 local function neo_hover()
-  local m = vim.fn.getmousepos()
+  local m = mousepos()
   if m.winid == 0 or m.winid ~= vim.api.nvim_get_current_win() then
     return
   end
@@ -226,15 +239,16 @@ local function neo_hover()
   if not ok_buf or vim.bo[buf].filetype ~= 'neo-tree' then
     return
   end
-  if m.line < 1 or m.line > vim.api.nvim_buf_line_count(buf) then
+  if not on_row(m) then
     return
   end
-  pcall(vim.api.nvim_win_set_cursor, m.winid, { m.line, 0 })
+  set_tree_cursor(m.winid, m.line)
 end
 
 -- Right-click: Cursor-style file/folder actions menu (see TreePopUp).
 local function neo_show_tree_menu(state)
   neo_node_at_mouse(state) -- position the cursor; menu acts on it
+  vim.cmd 'redraw' -- the dispatcher runs this scheduled; popup won't draw itself
   vim.cmd 'popup TreePopUp'
 end
 
@@ -245,7 +259,7 @@ local function neo_single_click(state)
   if vim.uv.now() - neo_last_pin < 300 then
     return -- final release of a double-click: keep focus in the editor
   end
-  local m = vim.fn.getmousepos()
+  local m = mousepos()
   if neo_press.opened and m.winid == neo_press.winid and m.line == neo_press.line then
     return -- press already previewed this exact row
   end
@@ -265,37 +279,47 @@ local function neo_open_focused(state)
   neo_open_node(state, neo_cursor_node(state), true)
 end
 
+-- Right / l, as in Cursor: expand a closed folder, step into an open one,
+-- preview a file (focus stays in the tree).
+local function neo_expand(state)
+  state = neo_active_state(state)
+  local node = neo_cursor_node(state)
+  if not node then
+    return
+  end
+  if node.type ~= 'directory' then
+    neo_open_node(state, node, false)
+  elseif not node:is_expanded() then
+    require('neo-tree.sources.filesystem').toggle_directory(state, node)
+  elseif #node:get_child_ids() > 0 then
+    vim.cmd 'normal! j' -- first child is the row below
+  end
+end
+
+-- Left / h, as in Cursor: collapse an open folder, otherwise select the parent.
+local function neo_collapse(state)
+  state = neo_active_state(state)
+  local node = neo_cursor_node(state)
+  if not node then
+    return
+  end
+  if node.type == 'directory' and node:is_expanded() then
+    require('neo-tree.sources.filesystem').toggle_directory(state, node)
+    return
+  end
+  local parent = node:get_parent_id()
+  if parent then
+    require('neo-tree.ui.renderer').focus_node(state, parent)
+  end
+end
+
+local function noop() end
+
 local neo_mappings = {
   ['<CR>'] = neo_open_focused,
   -- `o` replaces neo-tree's order-by submenu: open like an IDE instead.
   ['o'] = neo_open_focused,
-  ['<2-LeftMouse>'] = neo_pin_at_mouse,
-  ['<LeftMouse>'] = function(state)
-    neo_record_press(state, true)
-  end,
-  ['<S-LeftMouse>'] = function(state)
-    neo_record_press(state, true)
-  end,
-  ['<C-LeftMouse>'] = function(state)
-    neo_record_press(state, false)
-  end,
-  -- Tree text selection is useless (copy via right-click menu instead) and
-  -- fights with click-vs-drag detection, so swallow drags. Separator drags
-  -- (sidebar resize) are on the separator, not this buffer, and still work.
-  ['<LeftDrag>'] = function() end,
-  ['<S-LeftDrag>'] = function() end,
-  ['<LeftRelease>'] = neo_single_click,
-  ['<S-LeftRelease>'] = neo_single_click,
-  -- Ctrl+click (Cmd+click equivalent): open to the side, focus the editor.
-  ['<C-LeftRelease>'] = neo_side_at_mouse,
-  -- Middle-click: open to the side (browser-style). The press is swallowed
-  -- so it never pastes into the tree buffer.
-  ['<MiddleMouse>'] = function() end,
-  ['<MiddleRelease>'] = neo_side_at_mouse,
-  ['<MouseMove>'] = neo_hover,
-  ['<RightMouse>'] = neo_show_tree_menu,
-  -- Double-right-click shows the menu too (no surprise root changes).
-  ['<2-RightMouse>'] = neo_show_tree_menu,
+  ['<2-LeftMouse>'] = 'none', -- the mouse dispatcher handles every click
   -- `Y` would yank the rendered line as text (the only unbound yank key
   -- left); copy the relative path instead, like the old tree did.
   ['Y'] = function(state)
@@ -311,61 +335,204 @@ local neo_mappings = {
   ['S'] = function(state)
     neo_open_side(state, neo_cursor_node(state), 'split')
   end,
+  -- Cursor keyboard: arrows walk the tree, F2 renames, Delete/Backspace delete
+  -- (neo-tree asks first). Backspace no longer jumps the root up a folder.
+  ['<Right>'] = neo_expand,
+  ['l'] = neo_expand,
+  ['<Left>'] = neo_collapse,
+  ['h'] = neo_collapse,
+  ['<F2>'] = 'rename',
+  ['<Del>'] = 'delete',
+  ['<BS>'] = 'delete',
+  ['<Home>'] = function()
+    vim.cmd 'normal! gg'
+  end,
+  ['<End>'] = function()
+    vim.cmd 'normal! G'
+  end,
 }
 
--- Visual/select-mode safety net: a trackpad tap with the slightest movement
--- starts visual mode instead of clicking. These exit visual and open the
--- clicked row anyway; text yank/put stay disabled so the tree never acts
--- like a text buffer (node ops live on normal-mode keys).
-vim.api.nvim_create_autocmd('FileType', {
-  pattern = 'neo-tree',
-  desc = 'File tree: panel display, mouse without text selection',
-  callback = function(ev)
-    vim.opt_local.list = false
-    vim.opt_local.wrap = false
-    vim.keymap.set({ 'x', 's' }, '<LeftMouse>', function()
-      neo_record_press(nil, false)
-    end, { buffer = ev.buf, desc = 'Record press' })
-    vim.keymap.set({ 'x', 's' }, '<S-LeftMouse>', function()
-      neo_record_press(nil, false)
-    end, { buffer = ev.buf, desc = 'Record press' })
-    vim.keymap.set({ 'x', 's' }, '<LeftDrag>', function() end, { buffer = ev.buf, desc = 'No text drag in tree' })
-    vim.keymap.set({ 'x', 's' }, '<S-LeftDrag>', function() end, { buffer = ev.buf, desc = 'No text drag in tree' })
-    vim.keymap.set({ 'x', 's' }, '<MiddleMouse>', function() end, { buffer = ev.buf, desc = 'Swallow middle press' })
-    local function visual_release(pin)
-      neo_exit_visual_for_click()
-      if pin then
-        neo_pin_at_mouse(nil)
-      else
-        neo_single_click(nil)
-      end
+-- A row list, not text: no visual selection, sideways motions, horizontal
+-- scrolling, word search or insert. Keys neo-tree binds (w, b, e, f, t, i, a, ...)
+-- keep their tree actions.
+for _, key in ipairs {
+  'v',
+  'V',
+  '<C-v>',
+  'gv',
+  '0',
+  '^',
+  '$',
+  'W',
+  'B',
+  'E',
+  'F',
+  'ge',
+  'gE',
+  '*',
+  'I',
+  'O',
+  'gi',
+  'gI',
+  'zh',
+  'zl',
+  'zH',
+  'zL',
+  '<ScrollWheelLeft>',
+  '<ScrollWheelRight>',
+} do
+  neo_mappings[key] = neo_mappings[key] or noop
+end
+
+-- Cursor shows a highlighted row, not a text cursor: hide the terminal cursor
+-- (blend=100, see :h tui-cursor-shape) while a tree window is focused. Only
+-- normal/visual modes, so prompts and the cmdline keep a visible cursor.
+local saved_guicursor
+local function sync_tree_cursor()
+  local in_tree = vim.bo.filetype == 'neo-tree'
+  if in_tree and not saved_guicursor then
+    saved_guicursor = vim.o.guicursor
+    vim.api.nvim_set_hl(0, 'IdeHiddenCursor', { blend = 100, nocombine = true })
+    vim.o.guicursor = saved_guicursor .. ',n-v:IdeHiddenCursor'
+  elseif not in_tree and saved_guicursor then
+    vim.o.guicursor = saved_guicursor
+    saved_guicursor = nil
+  end
+end
+vim.api.nvim_create_autocmd({ 'BufEnter', 'WinEnter', 'FileType' }, {
+  desc = 'Hide the text cursor in the file tree',
+  callback = sync_tree_cursor,
+})
+vim.api.nvim_create_autocmd('VimLeavePre', {
+  desc = 'Leave the shell with a visible cursor',
+  callback = function()
+    if saved_guicursor then
+      vim.o.guicursor = saved_guicursor
     end
-    vim.keymap.set({ 'x', 's' }, '<LeftRelease>', function()
-      visual_release(false)
-    end, { buffer = ev.buf, desc = 'Open (single-click from visual)' })
-    vim.keymap.set({ 'x', 's' }, '<S-LeftRelease>', function()
-      visual_release(false)
-    end, { buffer = ev.buf, desc = 'Open (shift-click from visual)' })
-    vim.keymap.set({ 'x', 's' }, '<2-LeftMouse>', function()
-      visual_release(true)
-    end, { buffer = ev.buf, desc = 'Open file (double-click from visual)' })
-    vim.keymap.set('x', 'y', '<Nop>', { buffer = ev.buf, desc = 'No text yank in tree' })
-    vim.keymap.set('x', 'Y', '<Nop>', { buffer = ev.buf, desc = 'No text yank in tree' })
-    vim.keymap.set('x', 'p', '<Nop>', { buffer = ev.buf, desc = 'No text put in tree' })
-    -- Clicks from insert/terminal mode: record + leave the mode so the
-    -- release lands in normal mode and opens on the first click.
-    vim.keymap.set('i', '<LeftMouse>', function()
-      vim.cmd 'stopinsert'
-      neo_record_press(nil, true)
-    end, { buffer = ev.buf, desc = 'Record press' })
-    vim.keymap.set('t', '<LeftMouse>', function()
-      neo_record_press(nil, false)
-      if vim.api.nvim_get_mode().mode == 't' then
-        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes([[<C-\><C-n>]], true, false, true), 'n', false)
-      end
-    end, { buffer = ev.buf, desc = 'Record press' })
   end,
 })
+
+-- Last line of defence for "it's a list, not text": whatever route enters visual
+-- or select mode in the tree (a key not covered above, a plugin), leave it at once.
+vim.api.nvim_create_autocmd('ModeChanged', {
+  pattern = '*:[vVsS\22\19]*',
+  desc = 'File tree: no text selection',
+  callback = function()
+    if vim.bo.filetype == 'neo-tree' then
+      vim.schedule(function()
+        if vim.bo.filetype == 'neo-tree' and vim.api.nvim_get_mode().mode:find '^[vVsS\22\19]' then
+          vim.api.nvim_feedkeys(vim.keycode '<Esc>', 'nx', false)
+        end
+      end)
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'neo-tree',
+  desc = 'File tree: panel display',
+  callback = function()
+    vim.opt_local.list = false
+    vim.opt_local.wrap = false
+  end,
+})
+
+-- One dispatcher for every mouse event over the tree, whichever window has focus.
+-- Mappings resolve against the focused buffer, so a click arriving from the editor
+-- or terminal ran their behavior (text cursor, visual selection, editor menu);
+-- on_key sees the typed key and drops it, then the tree acts on it instead.
+-- A press in the tree owns its drags and release; separators and status lines
+-- (line 0) are left alone so the sidebar still resizes. Wheel scrolling stays native.
+local function is_tree_win(win)
+  return win ~= 0
+    and vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_config(win).relative == ''
+    and vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'neo-tree'
+end
+
+local tree_mouse = {
+  Left = {
+    Mouse = function(mods, count)
+      if count >= 2 then
+        neo_pin_at_mouse()
+      else
+        neo_record_press(nil, not mods:find 'C%-') -- Ctrl+click opens on release
+      end
+    end,
+    Release = function(mods)
+      if mods:find 'C%-' then
+        neo_side_at_mouse()
+      else
+        neo_single_click()
+      end
+    end,
+  },
+  Right = { Mouse = neo_show_tree_menu },
+  Middle = { Release = neo_side_at_mouse }, -- browser-style open to the side
+}
+
+local tree_press = false
+local swallow_rest = false
+vim.on_key(function(key, typed)
+  -- A dropped mapping still queues the rest of its keys (a Lua callback is
+  -- <K_LUA>{id}<CR>, a <Cmd> rhs is its command text): drop them up to the <CR>,
+  -- or `150<CR>` would move the cursor 150 lines. They arrive untyped.
+  if swallow_rest then
+    if typed == '' then
+      swallow_rest = key ~= '\r'
+      return ''
+    end
+    swallow_rest = false
+  end
+  -- The mouse key is {key} itself, or (when a mapping turned it into something else)
+  -- the last key of {typed}, which can also hold keys typed before it.
+  local mods, button, action = vim.fn.keytrans(key):match '^<([^<>]-)(%u%l+)(%u%l+)>$'
+  local from_mapping = not button
+  if from_mapping then
+    mods, button, action = vim.fn.keytrans(typed):match '<([^<>]-)(%u%l+)(%u%l+)>$'
+  end
+  if button == 'Mouse' and action == 'Move' then
+    local m = vim.fn.getmousepos()
+    if m.winid == vim.api.nvim_get_current_win() and is_tree_win(m.winid) then
+      vim.schedule(function()
+        mouse_pos = m
+        neo_hover()
+        mouse_pos = nil
+      end)
+    end
+    return
+  end
+  if not tree_mouse[button] then
+    return
+  end
+  local m = vim.fn.getmousepos()
+  if action == 'Mouse' then
+    tree_press = is_tree_win(m.winid) and m.line > 0
+  end
+  if not tree_press then
+    return
+  end
+  if action == 'Release' then
+    tree_press = false
+  end
+  swallow_rest = from_mapping
+  local handler = tree_mouse[button][action]
+  local count = tonumber(mods:match '(%d)%-') or 1
+  vim.schedule(function()
+    -- Leave insert/visual/terminal mode now (`x`: synchronously), or the tree
+    -- inherits it: a menu from terminal mode never draws.
+    if vim.api.nvim_get_mode().mode ~= 'n' then
+      swallow_rest = false
+      vim.api.nvim_feedkeys(vim.keycode '<C-\\><C-n>', 'nx', false)
+    end
+    mouse_pos = m
+    if handler then
+      pcall(handler, mods, count)
+    end
+    mouse_pos = nil
+  end)
+  return ''
+end, vim.api.nvim_create_namespace 'ide_tree_mouse')
 
 local function nt_cmd(name)
   local state = neo_state()

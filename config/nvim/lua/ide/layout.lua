@@ -136,6 +136,19 @@ vim.api.nvim_create_autocmd('VimEnter', {
       vim.api.nvim_set_current_win(mid) -- leave focus in the middle, like Cursor
     end
     vim.g.ide_restoring = false
+    -- Filetype detection uses :setf, which is a no-op once FileType has fired in the
+    -- current autocmd chain; the tree and terminal already fired it in this callback,
+    -- so the first restored file opened with no filetype (no highlighting, no LSP).
+    -- Detect again outside the chain.
+    vim.schedule(function()
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(b) and vim.bo[b].buftype == '' and vim.bo[b].filetype == '' and vim.api.nvim_buf_get_name(b) ~= '' then
+          vim.api.nvim_buf_call(b, function()
+            vim.cmd 'filetype detect'
+          end)
+        end
+      end
+    end)
   end,
 })
 

@@ -163,7 +163,11 @@ local function ide_restore_files()
       if type(state.active) == 'string' and state.active ~= '' then
         for _, b in ipairs(vim.api.nvim_list_bufs()) do
           if vim.api.nvim_buf_get_name(b) == state.active then
-            vim.api.nvim_set_current_buf(b)
+            -- A leftover swap file makes this raise E325, which aborted the rest of
+            -- the restore (terminals, layout). Skip; opening the file still warns.
+            if not pcall(vim.api.nvim_set_current_buf, b) then
+              break
+            end
             if type(state.cursor) == 'table' then
               pcall(vim.api.nvim_win_set_cursor, 0, { state.cursor[1] or 1, (state.cursor[2] or 1) - 1 })
               vim.cmd 'normal! zz'
