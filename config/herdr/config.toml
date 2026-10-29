@@ -1,0 +1,12 @@
+onboarding = false
+
+[keys]
+prefix = "ctrl+space"
+new_tab = "cmd+t"
+switch_tab = "cmd+1..9"
+focus_pane_left = "cmd+h"
+focus_pane_down = "cmd+j"
+focus_pane_up = "cmd+k"
+focus_pane_right = "cmd+l"
+new_workspace = "cmd+shift+n"
+close_workspace = "cmd+w"
