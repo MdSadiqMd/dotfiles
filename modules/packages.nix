@@ -23,6 +23,7 @@ pkgs: with pkgs; {
     nodejs_20
     typescript
     yarn
+    pnpm_10 # pinned to 10: repos' node_modules are pnpm 10 layouts; pnpm 11 reinstalls them
     nodePackages.node2nix
     (python311.withPackages (ps: [
       ps.pip

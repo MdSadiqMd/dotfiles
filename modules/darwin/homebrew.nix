@@ -56,6 +56,7 @@ in
     brews = [
       "b2-tools"
       "blueutil"
+      "fastfetch"
       "ffmpeg"
       "ffuf"
       "fzf"

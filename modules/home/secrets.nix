@@ -21,6 +21,7 @@ let
   # ~/.config/sops-nix/secrets/<name> for a tool or template to read.
   secrets = {
     motherduck-token = { };
+    experiential-labs-api-key = { };
     opencode-service-password = { };
     github-token = { };
     gpg-signing-key = { };
