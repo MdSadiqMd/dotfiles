@@ -2,7 +2,7 @@
 
 Flags beats whose word error rate exceeds a threshold, which catches
 mispronounced terms, dropped words, and garbled numbers.
-Run: .kokoro/bin/python tools/qa_asr.py
+Run: .kokoro/bin/python tools/qa_asr.py [key prefixes, e.g. e5 e6]
 """
 import re
 import sys
@@ -26,9 +26,12 @@ def norm(s):
 
 
 def main():
+    prefixes = tuple(sys.argv[1:]) or ("",)
     flagged, total_wer, n = [], 0.0, 0
     for beats in CHAPTERS.values():
         for key, text in beats:
+            if not key.startswith(prefixes):
+                continue
             heard = mlx_whisper.transcribe(str(ROOT / "audio" / f"{key}.wav"),
                                            path_or_hf_repo=MODEL)["text"]
             wer = jiwer.wer(norm(text), norm(heard))

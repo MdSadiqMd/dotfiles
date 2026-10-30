@@ -1,7 +1,7 @@
 """Render chapters and build review contact sheets.
 
   python3 tools/render.py ch00 ch01        # 480p15 preview + contact sheet
-  python3 tools/render.py all -q h         # final quality, every chapter
+  python3 tools/render.py all -q h         # final quality, every chapter (or an episode key, e.g. ep1)
   python3 tools/render.py ch03 --sheet 20  # denser contact sheet
 """
 import argparse
@@ -12,10 +12,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from narration import ORDER  # noqa: E402
+from narration import EPISODES, ORDER  # noqa: E402
 
 TEX = Path.home() / "Library/TinyTeX/bin/universal-darwin"
-QDIR = {"l": "480p15", "m": "720p30", "h": "1080p60", "k": "2160p60"}
+QDIR = {"l": "480p15", "m": "720p30", "p": "1080p30", "h": "1080p60", "k": "2160p60"}
 
 
 def scene_file(key):
@@ -29,7 +29,13 @@ def output(key, q):
 
 def render(key, q):
     env = dict(os.environ, PATH=f"{TEX}:{os.environ['PATH']}")
-    cmd = ["manim", "render", f"-q{q}", "--disable_caching",
+    # A LaTeX cache per chapter, so chapters can render in parallel processes without racing on cleanup.
+    cfg = ROOT / "media" / f"manim_{key}.cfg"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text(f"[CLI]\ntex_dir = {ROOT / 'media' / 'Tex' / key}\n")
+    # "p" = 1080p at 30 fps: final quality at half the render time of 1080p60.
+    qflags = ["-qh", "--frame_rate", "30"] if q == "p" else [f"-q{q}"]
+    cmd = ["manim", "render", *qflags, "--disable_caching", "--config_file", str(cfg),
            "--media_dir", str(ROOT / "media"), str(scene_file(key)), key.capitalize()]
     res = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
     if res.returncode != 0:
@@ -62,7 +68,7 @@ def main():
     ap.add_argument("-q", default="l", choices=QDIR)
     ap.add_argument("--sheet", type=int, default=16)
     args = ap.parse_args()
-    keys = ORDER if args.keys == ["all"] else args.keys
+    keys = [k for a in args.keys for k in (ORDER if a == "all" else EPISODES.get(a, [a]))]
     for key in keys:
         path = render(key, args.q)
         sheet(path, key, args.sheet)

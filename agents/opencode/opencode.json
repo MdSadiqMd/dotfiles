@@ -1,26 +1,55 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "local-qwen": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Local Qwen",
-      "options": {
-        "baseURL": "http://192.168.0.37:8082/v1"
-      },
-      "models": {
-        "qwen3-27b": {
-          "name": "Qwen3 27B Dognosis"
+  "mcp": {
+    "servers": {
+      "MotherDuck": {
+        "type": "remote",
+        "url": "https://api.motherduck.com/mcp",
+        "headers": {
+          "Authorization": "Bearer {file:~/.config/sops-nix/secrets/motherduck-token}"
         }
       }
     }
   },
-  "mcp": {
-    "MotherDuck": {
-      "type": "remote",
-      "url": "https://api.motherduck.com/mcp",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {file:~/.config/sops-nix/secrets/motherduck-token}"
+  "providers": {
+    "explabs": {
+      "name": "explabs",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "https://api.experientiallabs.ai/v1",
+        "apiKey": "{file:~/.config/sops-nix/secrets/experiential-labs-api-key}"
+      },
+      "models": {
+        "claude-sonnet-4.6": {
+          "name": "Experiential Labs claude-sonnet-4.6",
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 3, "output": 15 }
+        },
+        "gpt-5.2-codex": {
+          "name": "Experiential Labs gpt-5.2-codex",
+          "limit": { "context": 400000, "output": 128000 },
+          "cost": { "input": 0.61, "output": 2.94 }
+        },
+        "gpt-5.1-codex": {
+          "name": "Experiential Labs gpt-5.1-codex",
+          "limit": { "context": 400000, "output": 128000 },
+          "cost": { "input": 0.61, "output": 2.94 }
+        },
+        "deepseek-v4.1-flash": {
+          "name": "Experiential Labs deepseek-v4.1-flash",
+          "limit": { "context": 1048576, "output": 393216 },
+          "cost": { "input": 0.3, "output": 1.2 }
+        },
+        "kimi-k2.7-code": {
+          "name": "Experiential Labs kimi-k2.7-code",
+          "limit": { "context": 262144, "output": 262144 },
+          "cost": { "input": 0.95, "output": 4 }
+        },
+        "glm-5.3": {
+          "name": "Experiential Labs glm-5.3",
+          "limit": { "context": 1048576, "output": 131072 },
+          "cost": { "input": 1.4, "output": 4.4 }
+        }
       }
     }
   }

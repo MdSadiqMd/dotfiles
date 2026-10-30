@@ -70,6 +70,16 @@
         ]
       }
     ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "WATCHER=WATCHER WATCHER_BACKEND_PORT=8228 WATCHER_FRONTEND_PORT=8228 WATCHER_API_URL=https://app.apolloresearch.ai/api /Users/sadiq/.local/share/apollo-watcher/watcher/watcher -m apollo_monitor.hooks.claude_code.subagent_stop"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
