@@ -15,10 +15,18 @@ Read the narration alone, with no visuals.
 - [ ] The tone is conversational ("you", "we", "notice that"). No formal lecture voice and no reading of labels.
 - [ ] Questions are followed by ` || ` before the answer, and long sentences are split.
 - [ ] Every number matches the facts table.
+- [ ] The story-and-continuity.md §7 checklist passes (premise first, ≤ 3 ideas, one stage, plants and payoffs).
 
-## Pass 2: contact sheets (after each `render.py`)
+## Pass 2: frames (after each `render.py`)
 
-Look at the frames alone, with no audio.
+Three checks, in this order:
+1. **Layout lint.** `render.py` prints the chapter's lint warnings (from `review/lint/`). Fix each one or confirm
+   it is a deliberate overlap.
+2. **Contact sheet** `review/chNN.png`: the frames alone, with no audio (the checklist below).
+3. **Beat sheet** `python3 tools/beat_review.py chNN`: one frame per narration segment next to its words
+   (`review/beats_chNN.png` + `.md`). For every segment ask: does this frame show what this sentence says, is the
+   newest thing the thing being named, and is anything misfitted (overflowing, half-covered, cut off, ghosted)?
+   Check suspicious spots at full resolution: `ffmpeg -ss T -i media/videos/<ch>/1080p60/ChNN.mp4 -frames:v 1 x.png`.
 
 - [ ] You can tell what the chapter is about from the frames alone.
 - [ ] Each frame has one obvious focal point; everything else is dimmed or gone.
@@ -26,10 +34,19 @@ Look at the frames alone, with no audio.
 - [ ] Labels sit next to their objects. No sentence-length text on screen.
 - [ ] Colors and places match the semantics in the storyboard.
 - [ ] Each beat shows motion (transform, grow, dim, push in). No static slides.
+- [ ] Every token fits its slot or box with padding; nothing pokes out, overflows a card, or covers a label.
+- [ ] No glow, no stray copies left behind after a move, nothing within 0.3 of the frame edge.
 
 ## Pass 3: cold watch (the assembled `-q l` preview, at 1×, start to finish)
 
 Watch it as the viewer would. Note the timestamp of every moment you'd rewind, get lost, or get bored.
+
+An agent can't watch at 1×. Its substitute, all three required:
+- beat sheets for every chapter (pass 2, step 3), read in order as one story;
+- `python3 tools/freeze_report.py` on the assembled preview: every stretch ≥ 4.5 s where the picture sits still
+  while the voice talks, mapped to its sentence (fix with motion that shows that sentence, then re-check);
+- the sync line from `assemble.py`.
+Then say plainly in the report that the film was reviewed through frames, and ask the user for timestamps.
 
 - [ ] Each animation lands on the word that names it, with no drift (`assemble.py` prints its sync check).
 - [ ] After each reveal there is a moment to absorb it before the voice moves on.
@@ -47,3 +64,6 @@ The common causes of "confusing", and their fixes:
 | lost in a long part | bring back the roadmap chain; add a one-line recap |
 | too complex | split the beat; one new idea per beat, ≤3 new elements |
 | looks right but feels flat | the beats are joined by "and then"; reorder into but/therefore |
+| good start, falls apart after 3–4 min | each chapter starts on a fresh screen with new icons; keep one stage and swap the players (story-and-continuity §3) |
+| "animations are basic" | motions don't carry the argument; give every motion a sentence (animation-craft §2) |
+| "things don't fit / overlap / cut off" | size containers from contents, align on bodies, run the lint (animation-craft §3) |

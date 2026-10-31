@@ -1,172 +1,170 @@
 ---
 name: manim-explainer
 description: >-
-  Makes narrated 3Blue1Brown-style Manim explainer videos (dark mode, voiceover,
-  beginner-friendly) on any topic: math, algorithms, systems, science, papers, code or
-  projects, as one video or a multi-episode series, optionally ending in question rounds.
-  Use when asked for a "manim video", "explainer video", "3b1b style video", a video
-  series, or to explain a topic, paper or codebase as a video. Ships a template: Kokoro
-  TTS with cue-synced animations, Whisper QA, render + contact sheets, loudness-mastered
-  assembly with an A/V sync check.
+  Makes narrated 3Blue1Brown-style Manim explainer videos (dark mode, voiceover, beginner-friendly) on any topic:
+  math, algorithms, systems, science, cryptography, papers, code or projects, as one video or a multi-episode
+  series, optionally ending in question rounds. Use when asked for a "manim video", "explainer video", "3b1b style
+  video", a video series, or to explain a topic, paper, thread or codebase as a video, and when iterating on such a
+  video from feedback. Ships a template: Kokoro TTS with cue-synced animations, Whisper QA, a layout lint, per-beat
+  review sheets, a frozen-frame report, domain kits, and loudness-mastered assembly with an A/V sync check.
 ---
 
 # Manim Explainer (3b1b style, narrated)
 
-Past videos were rejected for the reasons in the table below. Every rule in this skill exists to prevent one of them,
-so follow them from the start:
+Past videos were rejected for the reasons below. Every rule in this skill prevents one of them, so follow them
+from the start:
 
 | Rejection | Prevented by |
 |---|---|
-| "text overlapping" | contact-sheet review (step 7), fit-to-width helpers |
-| "generic animations" | what-if demos on real data; a motion verb in every storyboard row |
-| "bad audio" | Kokoro voice, ASR QA, two-pass loudnorm |
-| "too complex" | one idea per beat, ≤3 new elements, concrete before abstract |
-| "just reading" | labels on screen, reasoning in the voice; never read the screen aloud |
-| "audio ahead of the video" | `assemble.py` pads chapter audio and fails on any length mismatch |
+| "text overlapping", "objects not fitted", "cut off at the top" | containers sized from contents, `box_row`, safe area, **layout lint** (step 7) |
+| "generic / basic animations" (4/10) | every motion says a sentence; physical props; what-if demos (animation-craft.md) |
+| "explanation 5/10", jargon, no thread | premise first, ≤ 3 ideas, one running picture and example (story-and-continuity.md) |
+| "good start, falls apart after 3–4 minutes" | one persistent stage, swap the players, chapters continue (story-and-continuity §3) |
+| "too complex" / "just reading" | one idea per beat, ≤ 3 new elements; labels on screen, reasoning in the voice |
+| "the glow sucks" | no glow ever; state changes are colour, `Circumscribe`, a label, an opened lock |
+| "worst of all" after copying a reference image | a reference shows qualities to reach, not a style to copy; keep the theme |
+| "bad audio" / "audio ahead of the video" | Kokoro + ASR QA + two-pass loudnorm; `assemble.py` pads and checks sync |
 
-Terms used throughout:
-- **Episode:** one video in a series.
-- **Chapter:** one scene file and one rendered clip.
-- **Beat:** one narration line, `with self.beat(key)`.
-- **Cue:** one ` | `-separated segment of a beat, `b.cue(i)`.
+Terms: **episode** = one video of a series; **chapter** = one scene file and clip; **beat** = one narration line
+(`with self.beat(key)`); **cue** = one ` | `-separated segment of a beat (`b.cue(i)`); **stage** = the persistent
+scene the story plays on.
 
 ## Reference files (read when the step says so)
 
+- [reference/story-and-continuity.md](reference/story-and-continuity.md): premise, few ideas, one running
+  picture, one stage, plants and payoffs, misconceptions, content correctness. **Read before planning.**
 - [reference/planning-and-cinematography.md](reference/planning-and-cinematography.md): learning goals,
-  misconceptions, visual vocabulary per kind of topic, the arc, storyboard format, camera, focus, pacing.
-  **Read before planning.**
-- [reference/clarity-and-flow.md](reference/clarity-and-flow.md): the three-pass review that keeps the video
-  understandable. **Run it at steps 4, 7 and 8.**
-- [reference/series-code-quizzes.md](reference/series-code-quizzes.md): read when the request is a series,
-  explains a codebase/project, or wants question rounds (interview prep, exam practice, quizzes).
+  visual vocabulary per topic kind, arc, storyboard format, camera, focus, pacing. **Read before planning.**
+- [reference/animation-craft.md](reference/animation-craft.md): motion grammar, precision rules, component
+  recipes, what viewers liked. **Read before writing scenes.**
+- [reference/clarity-and-flow.md](reference/clarity-and-flow.md): the three review passes. **Run at steps 4, 7, 8.**
+- [reference/manim-pitfalls.md](reference/manim-pitfalls.md): opacity/fill, groups, paths, text, parallel
+  rendering. **Read before writing scenes; check when something renders wrong.**
+- [reference/series-code-quizzes.md](reference/series-code-quizzes.md): series, codebases, question rounds.
 
 ## Setup (once per machine, skip what exists)
 
 ```bash
 P=<project-dir>; cp -r ~/.claude/skills/manim-explainer/template/. $P && cd $P
-uv tool install manim                       # Manim CE 0.22; renders via system python3
+uv tool install manim                       # Manim CE 0.22; render.py calls the `manim` CLI
 # LaTeX: TinyTeX at ~/Library/TinyTeX (render.py adds its bin to PATH). If the installer stalls,
 # curl the tarball directly with retries and extract it by hand.
 uv venv .kokoro --python 3.12
 uv pip install -p .kokoro kokoro soundfile mlx-whisper jiwer \
   https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 ```
+Use `.kokoro/bin/python` for any helper script that needs numpy (system python3 has none).
 
 Layout:
 - `research/` (facts tables), `docs/storyboard.md`, `narration.py` (+ `script/epN.py` for a series).
-- `scenes/chNN_name.py` (class `ChNN`), `scenes/common.py` (shared look and helpers), optional
-  `scenes/kit_<domain>.py`, `tools/`, `assets/data/*.json` + `assets/stills/` (measured or sourced).
-- Outputs in `audio/ media/ review/`. The final is `final.mp4`, or `final/epN.mp4` for a series.
-- The template's `ch00_intro.py` and its narration are a working sample (a what-if demo on cues).
-  Run the pipeline on it once to check the setup, then replace it.
+- `scenes/chNN_name.py` (class `ChNN`); `scenes/common.py` (look, beats, lint, helpers); `scenes/kit_<domain>.py`
+  (recurring objects: `kit_nn.py` networks, `kit_protocol.py` parties/locks/table/dice/hash/fork);
+  `scenes/stage.py` (your builders that recreate the stage state each chapter starts from).
+- `tools/`: `make_voice.py`, `qa_asr.py`, `render.py`, `beat_review.py`, `freeze_report.py`, `assemble.py`.
+- `assets/data/*.json`, `assets/stills/` (measured or sourced). Outputs in `audio/ media/ review/`; final at
+  `final.mp4` (or `final/epN.mp4`). Keep earlier cuts in `v1/ v2/ …` (final + scenes + narration) when iterating.
+- The template's `ch00_intro.py` is a working sample. Run the pipeline on it once, then replace it.
 
 ## Workflow
 
 Copy this checklist into your reply and tick it off as you go:
 
 ```
-- [ ] 1 Research → research/*.md facts tables
-- [ ] 2 Plan: goals, misconceptions, visual vocabulary, arc, episode/chapter split
-- [ ] 3 Storyboard: shot list per beat
+- [ ] 1 Research → research/*.md facts table; source claims verified, corrections noted
+- [ ] 2 Plan: situation/question/goal, ≤3 ideas, running picture + example, the stage, arc
+- [ ] 3 Storyboard: stage geography, shot list per beat (motion = a sentence)
 - [ ] 4 Narration + flow review pass 1
 - [ ] 5 Voice + ASR QA
-- [ ] 6 Scenes
-- [ ] 7 Render per chapter + review pass 2 (loop until clean)
-- [ ] 8 Preview assembly + review pass 3 (cold watch)
-- [ ] 9 Final render + assembly, sync/LUFS verified
+- [ ] 6 Scenes (kit + stage builders)
+- [ ] 7 Render per chapter + review pass 2: lint, contact sheet, beat sheet (loop until clean)
+- [ ] 8 Preview assembly + review pass 3: beat sheets in order, freeze report, sync
+- [ ] 9 Final render + assembly, sync/LUFS verified, frames checked
 ```
 
-1. **Research.** Go to primary sources: papers with their appendices, official docs and specs, the code
-   itself, textbooks, datasets. Use web search to fill gaps and to find what learners usually get wrong.
-   Save the findings to `research/<topic>.md` as a facts table (claim → exact source) *before* planning.
-   - Every on-screen number and claim comes from that table.
-   - Be honest: show where a method loses, what is an extrapolation, and what is unknown or disputed.
-   - For code, measure by running it (see series-code-quizzes.md).
-2. **Plan** (planning-and-cinematography.md §1–3):
-   - 3–5 learning goals, each with its misconception and prerequisites.
-   - Pick the picture for each idea (§2a).
-   - Hook puzzle → roadmap → but/therefore chain → payoff.
-   - One idea per 1–3 min chapter.
-3. **Storyboard** (`docs/storyboard.md`, §4–6): one row per beat covering:
-   - the question it answers and the focal object;
-   - the motion verb and the cue phrase it lands on;
-   - what is left on screen.
-   Fix the concept → color mapping and the screen geography here.
+1. **Research.** Primary sources first: papers with appendices, official docs and specs, the code, textbooks,
+   datasets (save PDFs and extract with `uvx --from pypdf`). Web search fills gaps and finds what learners get
+   wrong. When the user asks for deep research, use the deep-research skill (pedagogy for this kind of topic,
+   the topic's best teaching order, a verified facts table).
+   - Save `research/<topic>.md` as a facts table (claim → exact source) *before* planning; every on-screen
+     number comes from it.
+   - **Verify the source material too** (a thread, an article): misattributions and overstatements are common.
+     Tell the user what you corrected.
+   - Be honest: show where a method loses, what is extrapolated, what is unknown. For code, measure by running it.
+2. **Plan** (story-and-continuity.md, planning §1–3): the situation → question → goal of the first minute and
+   a numbered roadmap; at most three core ideas (one per act); one running picture and one running example with
+   small real numbers; the misconception and the obvious objection for each act; the stage and who sits where in
+   each act; plants and payoffs; a cut list.
+3. **Storyboard** (`docs/storyboard.md`): fix the stage geography and the concept → colour map, then one row per
+   beat: question it answers, focal object, motion and the sentence it says, the cue phrase it lands on, what is
+   left on screen.
 4. **Narration as a teacher, not a reader** (`narration.py`):
-   - Ask the question before giving the answer: "So what happens to the area? || It quadruples."
-   - Give the *why* for every step, with a tiny concrete case first ("1 → 3 → 6, so six times"), then the
-     name, then the general rule.
-   - Never read on-screen text aloud. The screen shows short labels; the voice explains.
-   - Talk to the viewer ("you", "we", "notice that"). Write numbers as words.
-   - Put ` | ` (short pause + cue) or ` || ` (long pause + cue) where an animation should land.
-   - Then run **clarity-and-flow pass 1**.
-5. **Voice:** `.kokoro/bin/python tools/make_voice.py` writes `audio/*.wav`, `durations.json` and
-   `cues.json`. Then `.kokoro/bin/python tools/qa_asr.py [prefix]`: mean WER should be < 0.05, and flags
-   should only be number formatting. Fix mispronounced words (names, jargon, acronyms) by respelling
-   them, re-voice, and re-check.
+   - Ask before answering: "So does Bob learn the slope? || He only sees one point."
+   - Concrete case first ("five plus three times seven is twenty six"), then the name, then the rule.
+   - Never read on-screen text aloud. Talk to the viewer ("you", "we", "notice"). Numbers as words.
+   - ` | ` = short pause + cue, ` || ` = long pause + cue, wherever an animation should land.
+   - Run **clarity-and-flow pass 1** (it includes the story-and-continuity checklist).
+5. **Voice:** `.kokoro/bin/python tools/make_voice.py` → `audio/*.wav`, `durations.json`, `cues.json`; then
+   `.kokoro/bin/python tools/qa_asr.py [prefix]`. Mean WER < 0.05 with only number-formatting flags; respell
+   mispronounced names and jargon, re-voice, re-check. Foreign names may stay anglicised; say so in the report.
 6. **Scenes.** Subclass `VoiceScene` / `Voice3DScene` / `InterviewScene` from `scenes/common.py`.
-   - Wrap each beat in `with self.beat("c1_2") as b:`.
-   - Call `b.cue(i)` right before the animation for segment i, and `b.span(i, j, frac)` to fill the time between cues.
-   - Between beats, call `self.fade_except(header)`; between chapters, `self.fade_all()`.
-   - Alias concept colors at the top of `common.py` (`INPUT = P_TEAL`).
-7. **Render + review:** `python3 tools/render.py ch03` renders 480p and writes `review/ch03.png`.
-   - **Look at every contact sheet** and run **pass 2**. Fix and re-render until clean.
-   - Spot-check single frames with `ffmpeg -ss T -i file -frames:v 1 x.png`.
-   - Chapters can render in parallel; each gets its own LaTeX dir.
-8. **Preview:** `python3 tools/assemble.py [ep] -q l`, then **pass 3**: watch at 1×, note every timestamp
-   where you got lost, fix the root cause, and re-watch.
-9. **Final:** `python3 tools/render.py all -q h && python3 tools/assemble.py -q h` gives 1080p60.
-   - For long videos or series, use `-q p` (1080p30, half the render time).
-   - Assembly does a two-pass loudnorm to −16 LUFS and **fails unless decoded audio length equals video
-     length** (±0.15 s).
-   - Report the duration, LUFS and the sync line, and grab frames from the last chapter, where drift shows first.
+   - Wrap each beat in `with self.beat("c1_2") as b:`; `b.cue(i)` right before the animation for segment i;
+     `b.span(i, j, frac)` fills the time between cues.
+   - Build recurring objects from the domain kit; size containers from their contents; lay out box equations
+     with `box_row`; roadmap with `roadmap(steps, current)`; side computations in `panel(w, h, title)`.
+   - Each chapter starts with a `stage.py` builder that recreates where the last chapter ended; the previous
+     chapter ends by settling into that state. `fade_all()` only at act boundaries.
+   - The layout lint runs by itself at every cue and beat end. Alias concept colours at the top (`SECRET = P_GOLD`).
+7. **Render + review pass 2:** `python3 tools/render.py ch03` (480p) prints the chapter's **lint warnings** and
+   writes `review/ch03.png`. Then `python3 tools/beat_review.py ch03`: one frame per narration segment beside
+   its words. Fix until lint is clean (or every remaining warning is a deliberate overlap) and every beat frame
+   shows what its sentence says. Check suspect frames at 1080p with `ffmpeg -ss T -i … -frames:v 1 x.png`.
+   Chapters can render in parallel (`xargs -P 4`); each has its own Tex and Text cache.
+8. **Preview + pass 3:** `python3 tools/assemble.py [ep] -q l`, then `python3 tools/freeze_report.py` and the
+   beat sheets of all chapters read in order. Fix every frozen stretch with motion that shows its sentence.
+9. **Final:** `python3 tools/render.py all -q h && python3 tools/assemble.py -q h` (1080p60; `-q p` = 1080p30 for
+   long films). Assembly does a two-pass loudnorm to −16 LUFS and **fails unless decoded audio length equals video
+   length** (±0.15 s). Report the duration, LUFS and the sync line, and show full-resolution frames of the spots
+   the user flagged and of the last chapter.
 
-## Visual rules (taken from 3b1b's own source)
+## Iterating on feedback
 
-- **Background and text:**
-  - Pure black background. LaTeX for prose and math (`T()` = Tex, `M()` = MathTex).
-  - No title bars, subtitles, decorative boxes or paragraphs on screen.
-  - A small chapter header with a `sub()` line per beat is fine for technical topics.
-- **Code:** `code()` (Menlo `Text`, no escaping) for identifiers and commands, `code_col()` for multi-line
-  code. Show real code and real values.
-- **Color:** one color per concept for the whole film or series, from the `P_*` palette. `FOCUS` (yellow)
-  only for "look here now"; `POS`/`NEG` for signed quantities.
-- **Domain kits:** recurring domain objects (networks, circuits, molecules, trees) live in a small
-  `scenes/kit_<domain>.py`, so they look identical everywhere. `kit_nn.py` is the example.
-- **Motion:**
-  - Transform, don't cut. Dim (`DIM` ≈ 0.18) instead of deleting.
-  - Push the camera in for emphasis. Show sensitivity with `wiggle`.
-  - Use live `ValueTracker` / `DecimalNumber` readouts and `always_redraw`.
-  - Hold 0.5–1 s on every key reveal.
-- **What-if demos, not statements:**
-  - Drive a parameter to an extreme and watch the result respond.
-  - Show a live estimate converging as the voice counts.
-  - Run a seeded simulation for anything stochastic.
-  - Build timelines and bars (`hbars`) from measured runs.
-- **Data:** plot real data from sources or measured JSON, never made-up curves. If an illustration is
-  schematic, say so on screen.
+- Fix exactly what was flagged, at the root (the shared helper, not one call site), and **keep what the user
+  liked**. Ask yourself what else shares the flagged flaw and fix those too.
+- Never change the theme, palette or typography unless asked. A reference image shows a quality (precision,
+  fit, alignment); reach that quality in the existing look. If you are unsure which is meant, ask.
+- Archive each cut (`v1/ …`) before rebuilding, so a regression can be compared and rolled back.
+- Report honestly: what changed per flagged point, what the lint still flags and why it's intended, and that an
+  agent reviews through frames, not at 1×. Ask for timestamps of anything still off.
 
-## Common mistakes
+## Visual rules (3b1b look)
 
-- **Audio drift.** Manim's audio track ends at the last sound, 1–2 s before the video, and a plain concat
-  drops those tails. The voice ran ~10 s ahead after 15 min. `assemble.py` pads each chapter; never
-  replace it with a simple concat.
-- **Text and layout:**
-  - `Write()` on a long Tex looks garbled mid-animation. Use `FadeIn` for sentences and `Write` only for short titles.
-  - Overflow: `scale_to_fit_width` anything built from data, and keep x within ±6.9. Text on a filled
-    shape must contrast with it (BLACK on bright fills).
-  - `Text` drops leading spaces and blank lines, so use `code_col` for code.
-- **Numbers:** ratios on screen ("≈20×") come from medians of unrounded runs.
-- **Manim pitfalls:**
-  - Animating a child of a group registers it on its own. Call `self.drop(group)` before re-adding, or
-    you get ghost copies and dead updaters.
-  - `ImageMobject` can't go in a `VGroup`; use `Group`.
-  - `DecimalNumber.animate.set_value` crashes when the digit count changes. Use `ChangeDecimalToValue`.
-- **Environment:**
-  - Pillow ≥13 breaks Manim's image canvas. Keep the shim at the top of `common.py`.
-  - LaTeX needs `\%`, `\_`, `\&`, `\$`; use `\texttt{}` for inline code.
-  - `rng.choice` on a mobject list fails, so pick by index.
-  - Brew ffmpeg has no `drawtext`, so contact sheets are unlabeled.
-- **Gates:** never render the final until every contact sheet is clean and the ASR QA has passed.
-- **Length:** clarity beats brevity. Accepted videos have run 12–32 min. Keep long ones navigable by
-  segmenting them (planning §3).
+- **Background and text:** pure black; LaTeX for prose and maths (`T()` = Tex, `M()` = MathTex, `MC()` for
+  coloured parts). No title bars, subtitles, decorative boxes, paragraphs or section titles ("THE TABLE").
+  Numbered lists use "1." "2." "3.".
+- **Colour:** one colour per concept for the whole film or series from the `P_*` palette; `FOCUS` yellow only for
+  "look here now"; `POS`/`NEG` for signs.
+- **Characters and props:** characters with eyes that follow the action; one physical prop per abstract concept
+  (padlock box = sealed/one-way, dice = random, blender = hash, program window = code we control).
+- **Motion:** every motion says a sentence (animation-craft.md §2). Transform, don't cut; `TransformFromCopy`
+  shows where each value comes from. Dim with `fade` + `Restore`. Live `ValueTracker` readouts. Hold 0.5–1 s on
+  each reveal. One thing moves at a time unless comparing.
+- **Never:** glow (stacked strokes), decorative camera drift, a `FadeIn`-only beat, stacked ghost copies,
+  anything within 0.3 of the frame edge, text or tokens overflowing their container.
+- **What-if demos, not statements:** drive a parameter to an extreme; a live estimate converging; a seeded
+  simulation for anything stochastic; timelines and bars from measured runs.
+- **Data:** real data from sources or measured JSON; label schematic illustrations as schematic.
+
+## Common mistakes (details in manim-pitfalls.md)
+
+- **Audio drift:** Manim's audio ends at the last sound; `assemble.py` pads each chapter. Never plain-concat.
+- **`set_opacity` fills outline shapes**, and `FadeOut` restores opacity so a later animation resurrects the
+  part. Use `fade` / `save_state` / `Restore`; remove parts that should stay gone.
+- **Paths:** build with `fill_opacity=0`; drop duplicate points before `MoveAlongPath`.
+- **Groups:** `self.drop(group)` before re-adding; filter `isinstance(m, VMobject)` before `VGroup(*self.mobjects)`.
+- **Text:** `Write` only short titles; escape LaTeX specials; `code_col` for code.
+- **Gates:** no final render until lint, beat sheets and ASR QA are clean.
+- **Length:** clarity beats brevity (accepted films ran 9–32 min); segment long ones (planning §3).
+
+Worked examples (if they still exist): `~/Developer/dust-video` (12 chapters, ML paper) and
+`~/.t3/scratch/2026-10-30-here-is-the-thread-regarding-a1de122b` (forking lemma: research notes, storyboard,
+`stage.py`, v1–v6 history in `v*/`).

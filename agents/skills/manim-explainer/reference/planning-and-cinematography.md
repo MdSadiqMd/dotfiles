@@ -71,7 +71,10 @@ Every video, and every chapter in miniature, follows this arc:
 - Guo et al. (6.9 M edX views) found that engagement drops past ~6 min per video. Longer videos
   (15–30 min) work if the user accepts them. In that case, make the *chapters* behave like short videos: give each a clear
   start, a visual reset, and a one-line recap.
-- Between chapters, do a full clear (`fade_all`). Within a chapter, keep the header and clear the rest
+- For a story that runs on a recurring scene (characters, a shared object), don't clear between chapters:
+  keep one stage and start each chapter from the state the last one ended in (story-and-continuity.md §3).
+  Clearing to a fresh screen with new icons every chapter is what made a film "fall apart after 3–4 minutes".
+  Otherwise, between chapters do a full clear (`fade_all`); within a chapter keep the header and clear the rest
   (`fade_except(header)`), or better, transform the last object into the next beat's first object.
 
 ## 4. Storyboard format
@@ -99,7 +102,9 @@ Rules:
   - Push in (`self.camera.frame.animate.scale(0.6).move_to(part)`) on the part being explained.
   - Pull back to reconnect it to the whole. A wide → close → wide rhythm keeps context.
 - **Screen geography is fixed.** Inputs on the left, outputs on the right, the header on top, source notes at
-  the bottom right. A concept keeps its color *and* its place across chapters and episodes.
+  the bottom right. A concept keeps its color *and* its place across chapters and episodes. For a protocol or
+  dialogue: a character left, a character right, the shared object between them at the bottom, public values
+  top-left, the idea area above.
 - **Contiguity.**
   - Put the label next to its object, not in a legend (spatial contiguity).
   - Make the object appear on the word that names it, via `b.cue` (temporal contiguity).

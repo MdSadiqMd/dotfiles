@@ -40,6 +40,7 @@ P_TEAL = "#5CD0B3"
 P_ORANGE = "#FF9F43"
 P_PURPLE = "#B98CFF"
 P_GREEN = "#83C167"
+P_GOLD = "#FFC857"
 POS, NEG = P_BLUE, P_RED  # signed quantities
 DIM = 0.18
 SOFT = GREY_B
@@ -57,6 +58,11 @@ class Beat:
     def __enter__(self):
         self.start = self.scene.renderer.time
         self.scene.add_sound(str(AUDIO / f"{self.key}.wav"))
+        # beat start times for tools/beat_review.py and tools/freeze_report.py; one file per beat, so chapters
+        # rendering in parallel never race on a shared file
+        log = ROOT / "review" / "beat_times"
+        log.mkdir(parents=True, exist_ok=True)
+        (log / f"{self.key}.txt").write_text(f"{self.start:.3f}")
         return self
 
     def t(self, frac):
@@ -65,6 +71,7 @@ class Beat:
 
     def cue(self, i):
         """Hold until narration segment i (split by | in narration.py) starts, so the next animation lands on it."""
+        lint(self.scene, f"{self.key}[{max(0, i - 1)}->]")
         target = self.start + CUES[self.key][i]
         rem = target - self.scene.renderer.time
         if rem > 0.03:
@@ -81,6 +88,7 @@ class Beat:
 
     def __exit__(self, kind, *_):
         if kind is None:
+            lint(self.scene, f"{self.key}[end]")
             rem = self.left()
             if rem > 0.03:
                 self.scene.wait(rem)
@@ -125,6 +133,20 @@ def T(s, size=36, color=WHITE):
 
 def M(s, size=40, color=WHITE, **kw):
     return MathTex(s, font_size=size, color=color, **kw)
+
+
+SYM = {}  # symbol -> concept colour, e.g. SYM.update({"x": SECRET, "e": CHAL}); used by MC
+
+
+def MC(*parts, size=44, colors=None, **kw):
+    """MathTex split into parts; parts that are known symbols get their concept colour, `colors` maps index -> colour."""
+    m = MathTex(*parts, font_size=size, **kw)
+    for i, (sub, p) in enumerate(zip(m, parts)):
+        if colors and i in colors:
+            sub.set_color(colors[i])
+        elif p.strip() in SYM:
+            sub.set_color(SYM[p.strip()])
+    return m
 
 
 def cell_grid(values, cell=0.42, vmax=None, buff=0.04):
@@ -285,3 +307,136 @@ class InterviewScene(VoiceScene):
                 self.play(FadeIn(row, shift=RIGHT * 0.2), run_time=0.6)
         self.wait(0.6)
         self.play(FadeOut(VGroup(tag, q, rule, lines)), run_time=0.6)
+
+
+def panel(w, h, title=None, center=ORIGIN):
+    """A framed work area with a small grey title inside its top-left corner (e.g. "Bob checks")."""
+    box = RoundedRectangle(corner_radius=0.22, width=w, height=h, stroke_color=GREY_D, stroke_width=2.5,
+                           fill_color=GREY_E, fill_opacity=0.35).move_to(center)
+    g = VGroup(box)
+    g.box = box
+    if title:
+        t = T(title, 24, GREY_B).move_to(box.get_corner(UL) + np.array([0.2, -0.22, 0]), aligned_edge=UL)
+        g.add(t)
+        g.title = t
+    return g
+
+
+def roadmap(steps, current=None):
+    """The numbered roadmap ("1." "2." "3."): the current step lit, the others grey; all lit when current is None."""
+    rows = VGroup()
+    for i, text in enumerate(steps):
+        lit = current is None or i == current
+        rows.add(VGroup(T(f"{i + 1}.", 50, FOCUS if lit else GREY_D), T(text, 46, WHITE if lit else GREY_D))
+                 .arrange(RIGHT, buff=0.45))
+    return rows.arrange(DOWN, buff=0.55, aligned_edge=LEFT).move_to(ORIGIN)
+
+
+def box_row(items, y, x=0.0, buff=0.3):
+    """Lay out an equation of boxes and symbols on one line. Items with a `.body` (e.g. a padlock box) align on
+    the body, not on their full bounding box, so a shackle on top doesn't push the box down."""
+    g = VGroup(*items).arrange(RIGHT, buff=buff).move_to([x, y, 0])
+    for m in items:
+        anchor = m.body.get_center()[1] if hasattr(m, "body") else m.get_center()[1]
+        m.shift(UP * (y - anchor))
+    return g
+
+
+# ------------------------------------------------------------------ layout lint
+_TEXT_TYPES = None
+
+
+def _text_units(mob, out):
+    global _TEXT_TYPES
+    if _TEXT_TYPES is None:
+        _TEXT_TYPES = (SingleStringMathTex, Text, MarkupText, DecimalNumber, Integer)
+    if isinstance(mob, _TEXT_TYPES):
+        out.append(mob)
+        return
+    for sm in mob.submobjects:
+        _text_units(sm, out)
+
+
+def _bbox(m):
+    return m.get_corner(DL)[:2], m.get_corner(UR)[:2]
+
+
+def _visible(m):
+    fam = [f for f in m.get_family() if isinstance(f, VMobject) and len(f.points)]
+    if not fam:
+        return False
+    return max(max(f.get_fill_opacity(), f.get_stroke_opacity()) for f in fam) > 0.3
+
+
+def _label(m):
+    return (getattr(m, "tex_string", None) or getattr(m, "text", None) or type(m).__name__)[:28]
+
+
+def lint(scene, where):
+    """Write layout problems at a rest point (a cue or the end of a beat) to review/lint/<beat>.txt:
+    anything outside the frame, two labels overlapping, a label half-covered by a filled shape, and a
+    filled shape poking half out of another one."""
+    tops = [m for m in scene.mobjects if m is not getattr(scene.camera, "frame", None)]
+    texts = []
+    for t in tops:
+        _text_units(t, texts)
+    text_ids = {id(f) for t in texts for f in t.get_family()}
+    texts = [t for t in texts if _visible(t)]
+    shapes = []
+    for t in tops:
+        for f in t.get_family():
+            if (isinstance(f, VMobject) and not f.submobjects and len(f.points) and id(f) not in text_ids
+                    and f.get_fill_opacity() >= 0.15 and f.width > 0.15 and f.height > 0.15):
+                shapes.append(f)
+    issues = []
+    for t in tops:
+        for f in t.get_family():
+            if isinstance(f, VMobject) and not f.submobjects and len(f.points) and _visible(f):
+                (x0, y0), (x1, y1) = _bbox(f)
+                if x0 < -7.05 or x1 > 7.05 or y0 < -3.97 or y1 > 3.97:
+                    issues.append(f"out of frame: {type(f).__name__} at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
+                    break
+
+    def inter(a, b):
+        (ax0, ay0), (ax1, ay1) = a
+        (bx0, by0), (bx1, by1) = b
+        w = min(ax1, bx1) - max(ax0, bx0)
+        h = min(ay1, by1) - max(ay0, by0)
+        return max(0, w) * max(0, h)
+
+    def area(a):
+        return (a[1][0] - a[0][0]) * (a[1][1] - a[0][1])
+
+    def inside(a, b, tol=0.03):
+        return a[0][0] >= b[0][0] - tol and a[0][1] >= b[0][1] - tol and a[1][0] <= b[1][0] + tol and a[1][1] <= b[1][1] + tol
+
+    tb = [(t, _bbox(t)) for t in texts]
+    for i in range(len(tb)):
+        for j in range(i + 1, len(tb)):
+            a, b = tb[i][1], tb[j][1]
+            ov = inter(a, b)
+            if ov > 0.12 * min(area(a), area(b)) and ov > 0.004:
+                issues.append(f"labels overlap: '{_label(tb[i][0])}' / '{_label(tb[j][0])}'")
+    sb = [(s_, _bbox(s_)) for s_ in shapes]
+    for t, a in tb:
+        for s_, b in sb:
+            ov = inter(a, b)
+            if ov > 0.08 * area(a) and ov > 0.004 and not inside(a, b):
+                issues.append(f"label half-covered: '{_label(t)}' by {type(s_).__name__}")
+    for i in range(len(sb)):
+        for j in range(len(sb)):
+            if i == j:
+                continue
+            a, b = sb[i][1], sb[j][1]
+            if area(a) >= area(b) or area(a) < 0.04 or isinstance(sb[i][0], Triangle) or getattr(sb[i][0], 'lint_skip', False):
+                continue
+            ov = inter(a, b)
+            if ov > 0.15 * area(a) and not inside(a, b, tol=0.04):
+                issues.append(f"shape pokes out: {type(sb[i][0]).__name__} over {type(sb[j][0]).__name__} "
+                              f"at ({(a[0][0] + a[1][0]) / 2:.2f},{(a[0][1] + a[1][1]) / 2:.2f})")
+    if issues:
+        out = ROOT / "review" / "lint"
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / f"{where.split('[')[0]}.txt", "a") as fh:
+            for line in dict.fromkeys(issues):
+                fh.write(f"{where}  {line}\n")

@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from narration import EPISODES, ORDER  # noqa: E402
+from narration import CHAPTERS, EPISODES, ORDER  # noqa: E402
 
 TEX = Path.home() / "Library/TinyTeX/bin/universal-darwin"
 QDIR = {"l": "480p15", "m": "720p30", "p": "1080p30", "h": "1080p60", "k": "2160p60"}
@@ -27,12 +27,19 @@ def output(key, q):
     return ROOT / "media" / "videos" / f.stem / QDIR[q] / f"{key.capitalize()}.mp4"
 
 
+def lint_files(key):
+    return [ROOT / "review" / "lint" / f"{beat}.txt" for beat, _ in CHAPTERS[key]]
+
+
 def render(key, q):
+    for f in lint_files(key):  # common.lint appends; start each render clean
+        f.unlink(missing_ok=True)
     env = dict(os.environ, PATH=f"{TEX}:{os.environ['PATH']}")
-    # A LaTeX cache per chapter, so chapters can render in parallel processes without racing on cleanup.
+    # A LaTeX and a Text (SVG) cache per chapter: chapters rendering in parallel otherwise race on the shared
+    # caches and fail with "ParseError: no element found".
     cfg = ROOT / "media" / f"manim_{key}.cfg"
     cfg.parent.mkdir(exist_ok=True)
-    cfg.write_text(f"[CLI]\ntex_dir = {ROOT / 'media' / 'Tex' / key}\n")
+    cfg.write_text(f"[CLI]\ntex_dir = {ROOT / 'media' / 'Tex' / key}\ntext_dir = {ROOT / 'media' / 'texts' / key}\n")
     # "p" = 1080p at 30 fps: final quality at half the render time of 1080p60.
     qflags = ["-qh", "--frame_rate", "30"] if q == "p" else [f"-q{q}"]
     cmd = ["manim", "render", *qflags, "--disable_caching", "--config_file", str(cfg),
@@ -72,6 +79,10 @@ def main():
     for key in keys:
         path = render(key, args.q)
         sheet(path, key, args.sheet)
+        found = [line for f in lint_files(key) if f.exists() for line in f.read_text().splitlines()]
+        if found:
+            print(f"{key}: {len(found)} layout warnings (review/lint/); fix them or confirm they are intended:")
+            print("\n".join(f"  {line}" for line in dict.fromkeys(found)))
 
 
 if __name__ == "__main__":
