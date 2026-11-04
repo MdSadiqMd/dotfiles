@@ -31,9 +31,8 @@ macOS: nix-darwin + home-manager (`darwinConfigurations.<host>`). Linux: standal
 
 ## Apply
 
-`just` lists the commands: `fmt`, `update` (apply the config at pinned versions), `rebuild` (bump flake.lock, apply, `brew upgrade`).
+`just` lists the commands: `fmt`, `check` (evaluate macOS and Linux without building), `update` (apply the config at pinned versions), `rebuild` (bump flake.lock, apply, `brew upgrade`).
 
 - macOS: `sudo darwin-rebuild switch --flake ~/.config/nix#<host>` (host from `vars.nix`; it is not the machine hostname)
 - Linux: `home-manager switch --flake ~/.config/nix`
 - New machine: edit `vars.nix`, then run `./bootstrap.sh`.
-- Check Linux from macOS: `nix eval .#homeConfigurations.<user>.activationPackage.drvPath`

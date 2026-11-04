@@ -13,7 +13,6 @@
   ];
 
   nixpkgs.hostPlatform = vars.system;
-  nixpkgs.config.allowUnfree = true;
 
   system.primaryUser = vars.user;
   users.users.${vars.user}.home = vars.home;

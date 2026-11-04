@@ -2,10 +2,10 @@
   description = "I use Nix btw";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nix-darwin.url = "github:LnL7/nix-darwin/nix-darwin-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nix-darwin.url = "github:nix-darwin/nix-darwin/nix-darwin-26.05";
     nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
-    home-manager.url = "github:nix-community/home-manager/release-25.11";
+    home-manager.url = "github:nix-community/home-manager/release-26.05";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
@@ -34,6 +34,12 @@
         };
       darwinVars = varsFor vars.darwinSystem;
       linuxVars = varsFor vars.linuxSystem;
+      nixpkgsConfig = {
+        allowUnfree = true;
+        # ponytail: pnpm 10 has open CVEs, kept only for the pnpm 10 layouts noted in
+        # modules/packages.nix. Drop this once those repos move to pnpm 11.
+        permittedInsecurePackages = [ "pnpm-10.34.0" ];
+      };
     in
     {
       darwinConfigurations.${vars.host} = nix-darwin.lib.darwinSystem {
@@ -43,6 +49,7 @@
         };
         modules = [
           ./modules/darwin
+          { nixpkgs.config = nixpkgsConfig; }
           home-manager.darwinModules.home-manager
           {
             home-manager = {
@@ -62,7 +69,7 @@
       homeConfigurations.${vars.user} = home-manager.lib.homeManagerConfiguration {
         pkgs = import nixpkgs {
           system = vars.linuxSystem;
-          config.allowUnfree = true;
+          config = nixpkgsConfig;
         };
         extraSpecialArgs = {
           inherit inputs;

@@ -82,18 +82,6 @@ in
           '';
         };
       };
-
-    # sops-nix needs Go >= 1.26; nixpkgs 25.11 defaults to 1.25 but ships 1.26.
-    # ponytail: drop this override once nixpkgs' default go is >= 1.26 (26.05).
-    package =
-      (import inputs.sops-nix {
-        pkgs = pkgs.extend (
-          _: prev: {
-            go = prev.go_1_26;
-            buildGoModule = prev.buildGoModule.override { go = prev.go_1_26; };
-          }
-        );
-      }).sops-install-secrets;
   };
 
   # A GPG keyring is a database, not a file to link: import the signing key (the

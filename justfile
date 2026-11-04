@@ -9,6 +9,11 @@ default:
 fmt:
     {{ treefmt }}
 
+# Evaluate both systems without building: catches removed packages and bad options
+check:
+    nix eval .#darwinConfigurations.$(nix eval --raw --file vars.nix host).system.drvPath
+    nix eval .#homeConfigurations.$(nix eval --raw --file vars.nix user).activationPackage.drvPath
+
 # Apply the config: install what was added, remove what was deleted; versions stay pinned
 update:
     #!/usr/bin/env bash
