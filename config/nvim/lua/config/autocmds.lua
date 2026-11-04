@@ -60,3 +60,34 @@ vim.api.nvim_create_autocmd('SwapExists', {
     end
   end,
 })
+
+-- Autosave: write a buffer when leaving insert mode, leaving the buffer or
+-- losing focus, so edits never sit unsaved. Special buffers (terminal, help,
+-- prompts) and read-only files are left alone; a failed write warns instead
+-- of disappearing silently.
+local function autosave(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local bo = vim.bo[buf]
+  if not bo.modified or not bo.modifiable or bo.readonly or bo.buftype ~= '' then
+    return
+  end
+  if vim.api.nvim_buf_get_name(buf) == '' then
+    return
+  end
+  vim.api.nvim_buf_call(buf, function()
+    local ok, err = pcall(vim.cmd, 'silent write')
+    if not ok then
+      vim.notify('Autosave failed: ' .. tostring(err), vim.log.levels.WARN)
+    end
+  end)
+end
+
+vim.api.nvim_create_autocmd({ 'InsertLeave', 'BufLeave', 'FocusLost' }, {
+  group = vim.api.nvim_create_augroup('autosave', { clear = true }),
+  desc = 'Write modified buffers automatically',
+  callback = function(ev)
+    autosave(ev.buf)
+  end,
+})

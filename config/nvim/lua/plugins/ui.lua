@@ -45,7 +45,9 @@ return {
   { -- Left file tree (neo-tree): IDE panel, files open in the middle window.
     'nvim-neo-tree/neo-tree.nvim',
     branch = 'v3.x',
-    dependencies = { 'nvim-lua/plenary.nvim', 'MunifTanjim/nui.nvim' },
+    -- Pin nui 0.4.0: main's tree redraw rewrite drops reused nodes while keeping
+    -- their _child_ids, so neo-tree's group_empty_dirs refresh crashes on a nil node.
+    dependencies = { 'nvim-lua/plenary.nvim', { 'MunifTanjim/nui.nvim', version = '0.4.0' } },
     cmd = 'Neotree', -- also loads on require('neo-tree...') from the IDE layout
     config = function()
       local ok, neotree = pcall(require, 'neo-tree')
