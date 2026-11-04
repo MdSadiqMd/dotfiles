@@ -19,8 +19,9 @@ let
         minute = 0;
       };
     };
-    helmet-comfort-report = {
-      command = "cd ~/${vars.workDir}/vision && monitoring/venv/bin/python monitoring/helmet_comfort_report.py";
+    # The script is the sops secret daily-report: it names a work project.
+    daily-report = {
+      command = "bash ${vars.home}/.config/sops-nix/secrets/daily-report";
       at = {
         hour = 8;
         minute = 0;

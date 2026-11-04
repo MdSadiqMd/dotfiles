@@ -21,10 +21,14 @@ let
   # ~/.config/sops-nix/secrets/<name> for a tool or template to read.
   secrets = {
     motherduck-token = { };
-    experiential-labs-api-key = { };
+    llm-gateway-api-key = { };
+    llm-gateway-url = { };
     opencode-service-password = { };
     github-token = { };
     gpg-signing-key = { };
+    daily-report = { };
+    ssh-aliases = { };
+    git-private.path = "${home}/.gitconfig.private";
     opencode-auth.path = "${home}/.local/share/opencode/auth.json";
     solana-keypair.path = "${home}/.config/solana/id.json";
     aws-credentials.path = "${home}/.aws/credentials";
@@ -32,12 +36,12 @@ let
   // lib.mergeAttrsList (
     map ssh [
       "id_ed25519"
-      "id_ed25519_sharif"
       "id_ed25519_tailscale"
       "gitlab_key"
       "google_compute_engine"
-      "human-archive-temp.pem"
-      "timbre-key.pem"
+      "extra-1"
+      "extra-2"
+      "extra-3"
     ]
   );
 in
@@ -104,6 +108,21 @@ in
       for _ in $(seq 50); do [ -r "$key" ] && break; sleep 0.1; done
       if [ -r "$key" ] && [ -n "$fpr" ] && command -v gpg >/dev/null && ! gpg --list-secret-keys "$fpr" >/dev/null 2>&1; then
         run gpg --batch --import "$key"
+      fi
+    ''
+  );
+
+  # The real names of the extra-N keys would identify projects, so they live in the
+  # ssh-aliases secret, one "<extra-N> <real-name>" per line, linked here at activation.
+  # After setupLaunchAgents: on macOS that step installs the sops job that decrypts it.
+  home.activation.linkSshAliases = lib.mkIf (has "ssh-aliases") (
+    lib.hm.dag.entryAfter [ "sops-nix" "setupLaunchAgents" ] ''
+      aliases=${config.sops.secrets.ssh-aliases.path}
+      for _ in $(seq 50); do [ -r "$aliases" ] && break; sleep 0.1; done
+      if [ -r "$aliases" ]; then
+        while read -r key name; do
+          run ln -sfn "$key" "${home}/.ssh/$name"
+        done <"$aliases"
       fi
     ''
   );

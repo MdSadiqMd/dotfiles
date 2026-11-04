@@ -4,12 +4,13 @@ macOS: nix-darwin + home-manager (`darwinConfigurations.<host>`). Linux: standal
 
 ## Layout
 
-- `vars.nix`: the only place for user, host, systems, the repo path and `workDir`. Never hard-code `/Users/...` or `/home/...` in nix; use `vars.home` / `vars.repoDir`. Dotfiles use `$HOME` or `~`.
+- `vars.nix`: the only place for user, host, systems and the repo path. Never hard-code `/Users/...` or `/home/...` in nix; use `vars.home` / `vars.repoDir`. Dotfiles use `$HOME` or `~`.
 - `modules/packages.nix`: `common` (both OSes) and `linux` (what Homebrew provides on macOS).
 - `modules/darwin/`: system settings, nix daemon/GC, Homebrew (brew is a normal checkout installed on first activation; nix-darwin manages the Brewfile), launchd agents.
 - `modules/home/`: `links.nix` (every symlink), `agents.nix` (AGENTS.md sync, agent CLIs), `tmux.nix` (plugins, server at login), `jobs.nix` (scheduled/background jobs), `zsh.nix` (zsh plugin paths), `activation.nix`, `openwhispr.nix` (macOS), `linux.nix`.
 - `config/<tool>/`: dotfiles. `agents/`: shared rules, skills and per-agent config (`claude/`, `opencode/`, `pi/`, `omp/`). `agents/tools/`: omp and pi pinned by `bun.lock`.
 - Secrets: `secrets/secrets.yaml` is sops-encrypted (age key in `~/.config/sops/age/keys.txt`, passphrase-encrypted backup outside the repo at `~/.config/sops/age/backup.age`) and committed; sops-nix (`modules/home/secrets.nix`) decrypts each entry to `~/.config/sops-nix/secrets/<name>`. Every credential lives there (gh/git token, API keys, SSH/GPG keys, wallet keypairs); tools that rewrite their credential files (gcloud, kubeconfig, OAuth logins) are the exception. Add one: `just secret-add <name> <file>` (or pipe stdin), then add `<name>` to `secrets` in `modules/home/secrets.nix` (with `.path` to place it where the tool looks); entries missing from the yaml are skipped. Never write plaintext secrets anywhere in the repo.
+- Private values: this repo is meant to be public, so employer, client and project names, private endpoints and email addresses go in sops too, never in the tree. sops key names are plain text, so keep them generic (`ssh-extra-1`, `llm-gateway-url`). Existing ones: `git-private` (git email and the work `includeIf`, linked to `~/.gitconfig.private`), `llm-gateway-url`, `daily-report` (the job's script), `ssh-aliases` (real names of `~/.ssh/extra-N`). These are read at activation or run time; nix eval never sees them.
 - Git-ignored, never commit: anything else in `secrets/`, `agents/skills/synced/` and `.trash/` (private claude.ai skills; `agents/skills/.gitignore` also hides them from pi), `agents/tools/node_modules/`, `config/zsh/sessions/`.
 
 ## Rules

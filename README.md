@@ -4,7 +4,7 @@ macOS (nix-darwin + home-manager) and Linux (home-manager) config. Every config 
 
 ## Setup
 
-Edit `vars.nix` (user, host, systems, repo path, work directory), then:
+Edit `vars.nix` (user, host, systems, repo path), then:
 
 ```sh
 git clone https://github.com/MdSadiqMd/Nix.git ~/.config/nix && ~/.config/nix/bootstrap.sh
@@ -12,9 +12,18 @@ git clone https://github.com/MdSadiqMd/Nix.git ~/.config/nix && ~/.config/nix/bo
 
 Secrets are sops-encrypted, but the age key is not in this repo: restore the passphrase-protected backup (`age-key.age`, kept in your password manager) to `~/.config/sops/age/keys.txt` before the first switch. Work commits get their address from `~/.gitconfig-work.local`, which is also outside the repo.
 
+Forking this? `secrets/secrets.yaml` is encrypted to my key, so replace it with your own (`.sops.yaml` names the key). Secrets missing from it are skipped. `git-private` holds your git email and any `includeIf` blocks, for example:
+
+```gitconfig
+[user]
+	email = you@example.com
+[includeIf "gitdir:~/work/"]
+	path = ~/.gitconfig-work
+```
+
 Ubuntu: first `sudo apt install -y git curl xz-utils`. Bootstrap also sets up GPU drivers for nix GUI apps and makes nix's zsh your login shell (log out and back in once). Set `linuxSystem` in `vars.nix` to `aarch64-linux` on ARM.
 
-Not automated, do by hand on a new machine: import the GPG key (`gpg --import`, commits are signed), add SSH keys, install Docker and the Claude Code / OpenCode CLIs with their own installers, and reinstall Apollo Watcher and claudemon if you want their hooks (without them Claude Code shows a hook error and keeps working).
+Not automated, do by hand on a new machine: import the GPG key (`gpg --import`, commits are signed), add SSH keys, install Docker and the Claude Code / OpenCode CLIs with their own installers, and reinstall claudemon if you want its status line.
 
 Day to day: `just fmt` (format everything), `just update` (apply config changes), `just rebuild` (upgrade everything to newer versions). New files must be `git add`ed first: flakes ignore untracked files.
 
@@ -22,7 +31,7 @@ Day to day: `just fmt` (format everything), `just update` (apply config changes)
 
 | Path                               | What                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------ |
-| `vars.nix`                         | user, host, systems, repo path, work directory                                             |
+| `vars.nix`                         | user, host, systems, repo path                                                             |
 | `flake.nix`                        | inputs, `darwinConfigurations`, `homeConfigurations`                                       |
 | `modules/packages.nix`             | packages for both OSes, plus Linux stand-ins for Homebrew                                  |
 | `modules/darwin/`                  | macOS system: nix settings, Homebrew, launchd agents                                       |

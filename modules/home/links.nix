@@ -23,12 +23,6 @@ in
     ".p10k.zsh" = link "config/zsh/.p10k.zsh";
     ".gitconfig" = link "config/git/config";
     ".gitconfig-work" = link "config/git/config-work";
-    # Work identity is picked by directory; the directory name comes from
-    # vars.workDir so config/git/config carries no company name.
-    ".gitconfig.workdir".text = ''
-      [includeIf "gitdir:~/${vars.workDir}/"]
-        path = ~/.gitconfig-work
-    '';
     ".config/git/ignore" = link "config/git/ignore";
     # Whole folder: htop saves htoprc by swapping in a new file.
     ".config/htop" = link "config/htop";

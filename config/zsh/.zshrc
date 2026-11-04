@@ -55,8 +55,6 @@ fi
 
 export ERL_AFLAGS="-kernel shell_history enabled"
 export GPG_TTY=$TTY
-export MESHER_MESHC_BIN="$HOME/Developer/mesh-lang/target/debug/meshc"
-export MESHER_MESHC_SOURCE="$HOME/Developer/mesh-lang"
 
 for f in $HOME/.config/envman/load.sh $HOME/.mesh/env $HOME/.local/bin/env $HOME/.local/bin/watcher-env; do
   [[ -r $f ]] && . $f
