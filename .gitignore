@@ -1,0 +1,11 @@
+result
+registry.json
+# secrets/: only encrypted files may be committed. The age key backup lives
+# outside the repo (~/.config/sops/age/backup.age) so it is never committed.
+secrets/*
+!secrets/secrets.yaml
+config/zsh/sessions/
+agents/tools/node_modules/
+# Rendered by sops-nix from secrets/secrets.yaml (modules/home/secrets.nix).
+agents/opencode/service.json
+agents/opencode/node_modules/
