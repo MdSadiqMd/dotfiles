@@ -29,6 +29,11 @@
     LIBRARY_PATH = "${pkgs.libiconv}/lib";
   };
 
+  # Twingate only sees office names while it is the default resolver, and Tailscale
+  # outranks it unless told not to. So Tailscale stays out of system DNS (see
+  # modules/home/activation.nix) and answers only ts.net names, through this file.
+  environment.etc."resolver/ts.net".text = "nameserver 100.100.100.100\n";
+
   # Don't rebuild the nix-darwin manual on every change.
   documentation.doc.enable = false;
   documentation.info.enable = false;

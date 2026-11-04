@@ -29,6 +29,7 @@ pkgs: with pkgs; {
       ps.pip
       ps.virtualenv
     ]))
+    uv
     rustup
     wasm-pack
     wasm-bindgen-cli

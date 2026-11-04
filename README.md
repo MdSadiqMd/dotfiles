@@ -23,7 +23,7 @@ Forking this? `secrets/secrets.yaml` is encrypted to my key, so replace it with 
 
 Ubuntu: first `sudo apt install -y git curl xz-utils`. Bootstrap also sets up GPU drivers for nix GUI apps and makes nix's zsh your login shell (log out and back in once). Set `linuxSystem` in `vars.nix` to `aarch64-linux` on ARM.
 
-Not automated, do by hand on a new machine: import the GPG key (`gpg --import`, commits are signed), add SSH keys, install Docker and the Claude Code / OpenCode CLIs with their own installers, and reinstall claudemon if you want its status line.
+Not automated, do by hand on a new machine: import the GPG key (`gpg --import`, commits are signed), add SSH keys, install Docker, the Tailscale and Twingate apps, and the Claude Code / OpenCode CLIs with their own installers, reinstall claudemon if you want its status line, and log in to your Claude accounts again with `cswap` (only its `settings.json` is tracked; logins stay on the machine).
 
 Day to day: `just fmt` (format everything), `just update` (apply config changes), `just rebuild` (upgrade everything to newer versions). New files must be `git add`ed first: flakes ignore untracked files.
 

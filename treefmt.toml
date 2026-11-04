@@ -17,6 +17,7 @@ excludes = [
   "agents/pi/**",
   "agents/skills/**",
   "agents/tools/**",
+  "config/claude-swap/settings.json",
   "config/nvim/LICENSE.md",
   "config/nvim/lazy-lock.json",
   "config/zed/settings.json",

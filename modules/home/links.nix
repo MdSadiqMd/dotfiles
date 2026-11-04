@@ -24,6 +24,10 @@ in
     ".gitconfig" = link "config/git/config";
     ".gitconfig-work" = link "config/git/config-work";
     ".config/git/ignore" = link "config/git/ignore";
+    # One file only: cswap writes through the link, and the rest of this folder holds
+    # account emails and login data.
+    "${if vars.isDarwin then ".claude-swap-backup" else ".local/share/claude-swap"}/settings.json" =
+      link "config/claude-swap/settings.json";
     # Whole folder: htop saves htoprc by swapping in a new file.
     ".config/htop" = link "config/htop";
     ".config/tmux" = link "config/tmux";

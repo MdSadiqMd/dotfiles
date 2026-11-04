@@ -10,9 +10,12 @@ let
   #   at:        daily { hour, minute }; missed runs happen on wake/boot
   #   keepAlive: a long-running service, restarted if it exits
   #   darwinOnly
+  #   enable:    false keeps the job defined but never installs it
   # Output goes to ~/.local/state/jobs/<name>.log.
   jobs = {
+    # Off: Claude Code no longer has a 5-hour usage limit, so there is no window to anchor.
     claude-warmup = {
+      enable = false;
       script = "jobs/claude-warmup.sh";
       at = {
         hour = 9;
@@ -48,7 +51,9 @@ let
     "/sbin"
   ];
   run = job: if job ? script then "${vars.repoDir}/${job.script}" else job.command;
-  active = lib.filterAttrs (_: job: pkgs.stdenv.isDarwin || !(job.darwinOnly or false)) jobs;
+  active = lib.filterAttrs (
+    _: job: (job.enable or true) && (pkgs.stdenv.isDarwin || !(job.darwinOnly or false))
+  ) jobs;
   scheduled = lib.filterAttrs (_: job: job ? at) active;
 in
 {
