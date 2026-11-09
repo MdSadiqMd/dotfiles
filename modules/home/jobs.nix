@@ -31,6 +31,11 @@ let
       };
       darwinOnly = true;
     };
+    docker-vm-trim = {
+      script = "jobs/docker-vm-trim.sh";
+      keepAlive = true;
+      darwinOnly = true;
+    };
     t3-network-guard = {
       script = "jobs/t3-network-guard.sh";
       keepAlive = true;

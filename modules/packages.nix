@@ -8,6 +8,9 @@ pkgs: with pkgs; {
     gh
     curl
     fd
+    ripgrep
+    shellcheck
+    poppler-utils
     ast-grep
     watchexec
     nh
@@ -49,7 +52,11 @@ pkgs: with pkgs; {
     perl
     protobuf
     postgresql_17
-  ];
+  ]
+  # GNU timeout alone: agents wrap commands in it, and full coreutils would shadow BSD ls/sed/date.
+  ++ lib.optional stdenv.isDarwin (
+    runCommand "timeout" { } "mkdir -p $out/bin && ln -s ${coreutils}/bin/timeout $out/bin/timeout"
+  );
 
   # Homebrew provides these on macOS (modules/darwin/homebrew.nix).
   linux = [

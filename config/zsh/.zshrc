@@ -17,7 +17,7 @@ path=(
   $HOME/.opencode/bin
   $HOME/.local/bin
   $HOME/.antigravity/antigravity/bin
-  $HOME/.npm-global/bing
+  $HOME/.npm-global/bin
   $BUN_INSTALL/bin
   $GOPATH/bin
   $HOME/.avm/bin
@@ -104,7 +104,9 @@ zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 zsource fzf-tab # after compinit, before plugins that wrap widgets
 cached_eval fzf fzf --zsh
 cached_eval zoxide zoxide init zsh
-cached_eval zoxide-cd zoxide init --cmd cd zsh
+# Not for agents (Claude Code snapshots this shell): zoxide's cd jumps to a
+# frecent match when the path doesn't exist, so `cd build && rm -rf *` could hit another dir.
+[[ -z $AI_AGENT$CLAUDECODE$OPENCODE ]] && cached_eval zoxide-cd zoxide init --cmd cd zsh
 ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=20
 ZSH_AUTOSUGGEST_USE_ASYNC=1
 zsource autosuggestions

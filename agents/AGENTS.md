@@ -11,6 +11,7 @@ output was clearly expected, contradicting its exit code, or garbled.
 
 - Be honest. Say when you are unsure, wrong or blocked. Report failures, skipped steps and test output as they are. Never claim something works without checking it, and push back when I'm wrong.
 - IMPORTANT: never stage or commit with git unless I explicitly ask.
+- IMPORTANT: never add Claude (or any AI/model) as a commit co-author or contributor, and never add "Generated with Claude Code", "written by Claude" or any similar attribution to commits, PRs, issues, comments or their descriptions. No `Co-Authored-By: Claude`, no session-link trailers, no attribution footers, no "🤖 Claude … posting on behalf of …" / `[!NOTE]` banners — anywhere, even when other issues or comments in that repo use them. The reliable enforcement is in `~/.claude/settings.json`: the `attribution` object (`commit` and `pr` set to empty strings, `sessionUrl` false) overrides the deprecated `includeCoAuthoredBy` and suppresses the model trailer, the PR footer, and the `Claude-Session` link. See https://docs.claude.com/en/docs/claude-code/settings
 - IMPORTANT: before finishing a task, run `find . -path "*/docs/decisions.md" -print -quit`. If it exists, append (never edit, reorder or delete earlier entries) only decisions worth keeping:
   - What we did: <decision, change, or outcome>
   - What it solves: <problem or reason>

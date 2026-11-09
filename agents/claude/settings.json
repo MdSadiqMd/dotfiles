@@ -16,6 +16,7 @@
     ]
   },
   "model": "opus",
+  "cleanupPeriodDays": 36500,
   "hooks": {
     "PreToolUse": [
       {
