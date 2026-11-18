@@ -26,6 +26,7 @@ macOS: nix-darwin + home-manager (`darwinConfigurations.<host>`). Linux: standal
 - zsh plugins come from nixpkgs via `modules/home/zsh.nix` (no plugin manager); `.zshrc` sets the load order.
 - Agent CLI updates: `omp update` / `pi update` (zsh wrappers) or `agent-update <pkg>@<ver>` rewrite `agents/tools/bun.lock`; activation installs only when the lock changed. Never update them in place.
 - tmux plugins come from `pkgs.tmuxPlugins` via `~/.local/share/tmux/plugins.conf`; don't reintroduce tpm. Hook scripts live in `config/tmux/scripts/`; resurrect saves in `~/.local/share/tmux/resurrect` (`@resurrect-dir`).
+- Language toolchains come from nix; project dependencies and build output stay with each language's own tools (no crane/uv2nix packaging). Cargo intermediates go to `~/.cargo/build` (`config/cargo/config.toml`). The `dev-cleanup` job (`jobs/dev-cleanup.sh`, `just clean`) reaps build output of projects idle 30 days and caps caches without their own eviction; tools that clean themselves (Cargo registry, Go build cache, Gradle, Homebrew, Docker build cache) are left to it.
 - Keep rebuilds cheap: no overlays that change hashes of cached packages, no work in activation scripts unless guarded, no blocking GC: each switch trims to 5 generations and kicks GC/optimise as low-priority background jobs.
 - Run `just fmt` after editing (treefmt: nix, shell, lua, json, markdown, yaml, toml; see `treefmt.toml`).
 

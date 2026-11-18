@@ -1,5 +1,51 @@
 # Rust comes from rustup. Rarely used tools: `nix shell nixpkgs#<pkg>`.
-pkgs: with pkgs; {
+pkgs:
+with pkgs;
+let
+  # ponytail: agents/tools/bun.lock is lockfileVersion 2 (bun >= 1.4), and nixos-26.05
+  # ships bun 1.3.13, which cannot read it. Prebuilt binaries, so no rebuild cost.
+  # Drop once nixpkgs has bun >= 1.4.
+  bun' = bun.overrideAttrs (
+    finalAttrs: old: {
+      version = "1.4.4";
+      # src follows passthru.sources below, so the version check is a false alarm.
+      __intentionallyOverridingVersion = true;
+      passthru = old.passthru // {
+        sources =
+          lib.mapAttrs
+            (
+              system:
+              { name, hash }:
+              fetchurl {
+                url = "https://github.com/oven-sh/bun/releases/download/bun-v${finalAttrs.version}/bun-${name}.zip";
+                inherit hash;
+              }
+            )
+            {
+              aarch64-darwin = {
+                name = "darwin-aarch64";
+                hash = "sha256-wkDX8My5DCY6hJ/NsJt+5iYw2SE0jtaq/ahrnVd7xRA=";
+              };
+              x86_64-darwin = {
+                name = "darwin-x64-baseline";
+                hash = "sha256-1KFVrfv9CRVes7oFyeOlRPOSl9emhhbTx3WfZ6tcR9w=";
+              };
+              aarch64-linux = {
+                name = "linux-aarch64";
+                hash = "sha256-uqa7NvUdblhWHgK76oJQOKnfRU9nPW13bou/hvjHhQ4=";
+              };
+              x86_64-linux = {
+                name = "linux-x64";
+                hash = "sha256-v4zL+ysLgBWeD5ptFcVTF63YB3U028YTCj7bUvzLOVw=";
+              };
+            };
+      };
+    }
+  );
+in
+{
+  bun = bun';
+
   common = [
     vim
     neovim
@@ -16,8 +62,10 @@ pkgs: with pkgs; {
     nh
     nixfmt
     obsidian
-    (if stdenv.isDarwin then ghostty-bin else ghostty)
-    bun
+    # hiPrio on Linux: ncurses ships its own share/terminfo/g/ghostty, which collides
+    # in home-manager's profile; ghostty's matches the installed version.
+    (if stdenv.isDarwin then ghostty-bin else lib.hiPrio ghostty)
+    bun'
     imagemagick # image.nvim renders through `magick`
     lua-language-server
     stylua
@@ -71,7 +119,14 @@ pkgs: with pkgs; {
     kind
     kubectl
     kubeshark
-    solana-cli
+    # ponytail: solana-cli 3.0.12 fails on nixos-26.05's rustc (solana-core denies
+    # warnings and the newer compiler flags an unneeded `unsafe`); not on the binary
+    # cache either way, so this costs no cache hits. Drop once nixpkgs builds it.
+    (solana-cli.overrideAttrs (o: {
+      env = o.env // {
+        RUSTFLAGS = "${o.env.RUSTFLAGS} --cap-lints warn";
+      };
+    }))
     tree
     wl-clipboard # nvim/tmux clipboard (Wayland)
     xclip # nvim/tmux clipboard (X11)

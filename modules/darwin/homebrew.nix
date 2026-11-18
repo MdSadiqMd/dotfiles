@@ -40,11 +40,22 @@ in
   # wins on overlaps (brew's python3 must not shadow nix python).
   environment.profiles = lib.mkAfter [ "/opt/homebrew" ];
 
+  # Mobile toolchain. The SDK stays a writable brew cask, not nixpkgs' androidenv, so
+  # sdkmanager/avdmanager can add system images and NDKs. JDK 17 is the one React
+  # Native's Gradle runs on; brew's default openjdk is too new for it. cocoapods and
+  # xcodegen come from brew too: nixpkgs' versions trail what Xcode 27 projects need.
+  environment.variables = {
+    ANDROID_HOME = "/opt/homebrew/share/android-commandlinetools";
+    JAVA_HOME = "/opt/homebrew/opt/openjdk@17";
+  };
+
   homebrew = {
     enable = true;
     taps = [ "rtk-ai/tap" ];
     casks = [
       "alt-tab"
+      "android-commandlinetools"
+      "android-platform-tools"
       "anydesk"
       "docker-desktop"
       "hammerspoon"
@@ -56,6 +67,7 @@ in
     brews = [
       "b2-tools"
       "blueutil"
+      "cocoapods"
       "fastfetch"
       "ffmpeg"
       "ffuf"
@@ -66,11 +78,15 @@ in
       "kind"
       "kubectl"
       "kubeshark"
+      "openjdk"
+      "openjdk@17"
       "pinentry-mac"
       "rtk"
       "solana"
       "tree"
       "watch"
+      "watchman"
+      "xcodegen"
       "zoxide"
     ];
     # ponytail: off until nix-darwin stops passing `--cleanup`, removed in brew 7.

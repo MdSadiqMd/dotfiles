@@ -30,6 +30,10 @@ rebuild:
     {{ apply }}
     {{ if macos == "true" { "export HOMEBREW_NO_ASK=1 HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1; brew update --quiet && brew upgrade" } else { "true" } }}
 
+# Remove stale build output and oversized caches now (the dev-cleanup job runs it daily); DRY_RUN=1 to preview
+clean:
+    jobs/dev-cleanup.sh
+
 # Edit encrypted secrets (the first run writes a key backup outside the repo)
 secrets:
     #!/usr/bin/env bash
