@@ -1,6 +1,20 @@
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  vars,
+  ...
+}:
 {
   home.activation = {
+    # manim-explainer skill: manim CLI and the shared Kokoro/Whisper venv, once per machine (setup.sh pins
+    # versions). Guarded by two existence checks; a failed install (offline) is retried on the next switch.
+    installManimExplainer = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      if [ ! -x "$HOME/.local/bin/manim" ] || [ ! -x "''${XDG_DATA_HOME:-$HOME/.local/share}/manim-explainer/venv/bin/python" ]; then
+        run env UV=${pkgs.uv}/bin/uv ${pkgs.bash}/bin/bash ${vars.repoDir}/agents/skills/manim-explainer/setup.sh \
+          || echo "warning: manim-explainer setup failed (offline?); next switch retries"
+      fi
+    '';
+
     # Unpinned: a pin lands in uv's receipt and would block `cswap upgrade`. --python
     # because uv would otherwise settle on the older system Python, which it rejects.
     installClaudeSwap = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

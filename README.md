@@ -7,10 +7,10 @@ macOS (nix-darwin + home-manager) and Linux (home-manager) config. Every config 
 Edit `vars.nix` (user, host, systems, repo path), then:
 
 ```sh
-git clone https://github.com/MdSadiqMd/Nix.git ~/.config/nix && ~/.config/nix/bootstrap.sh
+git clone https://github.com/MdSadiqMd/dotfiles.git ~/.config/nix && ~/.config/nix/bootstrap.sh
 ```
 
-Secrets are sops-encrypted, but the age key is not in this repo: restore the passphrase-protected backup (`age-key.age`, kept in your password manager) to `~/.config/sops/age/keys.txt` before the first switch. Work commits get their address from `~/.gitconfig-work.local`, which is also outside the repo.
+Secrets are sops-encrypted, but the age key is not in this repo: restore the passphrase-protected backup (`age-key.age`, kept in your password manager) to `~/.config/sops/age/keys.txt` before the first switch. Without it the switch still succeeds and decrypts nothing; the first switch after restoring the key puts every secret in place. Work commits get their address from `~/.gitconfig-work.local`, which is also outside the repo.
 
 Forking this? `secrets/secrets.yaml` is encrypted to my key, so replace it with your own (`.sops.yaml` names the key). Secrets missing from it are skipped. `git-private` holds your git email and any `includeIf` blocks, for example:
 
