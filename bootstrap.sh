@@ -2,7 +2,7 @@
 # New machine: installs Nix, clones this repo, runs the first switch. Safe to re-run.
 set -euo pipefail
 
-REPO="https://github.com/MdSadiqMd/Nix.git"
+REPO="https://github.com/MdSadiqMd/dotfiles.git"
 DIR="$HOME/.config/nix"
 NIX=(nix --extra-experimental-features "nix-command flakes")
 
@@ -50,10 +50,12 @@ if [ "$(uname)" = Darwin ]; then
   if command -v darwin-rebuild >/dev/null 2>&1; then
     sudo darwin-rebuild switch --flake "$DIR#$host"
   else
-    sudo "${NIX[@]}" run nix-darwin/nix-darwin-25.11#darwin-rebuild -- switch --flake "$DIR#$host"
+    # The flake's own pinned nix-darwin, so the first switch matches flake.lock.
+    sudo "${NIX[@]}" run --inputs-from "$DIR" nix-darwin#darwin-rebuild -- switch --flake "$DIR#$host"
   fi
 else
-  "${NIX[@]}" run home-manager/release-25.11 -- switch -b before-nix --flake "$DIR"
+  # The flake's own pinned home-manager, so the first switch matches flake.lock.
+  "${NIX[@]}" run --inputs-from "$DIR" home-manager -- switch -b before-nix --flake "$DIR"
   hm="$HOME/.nix-profile/bin"
   # Lets nix-built GUI apps (Ghostty, Obsidian) find the GPU drivers; re-run when
   # a switch warns that GPU drivers need an update.

@@ -1,0 +1,7 @@
+# Linked to ~/.cargo/config.toml (modules/home/links.nix); projects' own .cargo/config.toml wins.
+[build]
+# Intermediates (deps, incremental, fingerprints: ~95% of a build) go to one folder per
+# workspace under ~/.cargo/build, where jobs/dev-cleanup.sh reaps stale ones. ./target keeps
+# only final outputs (binaries, .so, target/deploy keypairs), so tools that read them still
+# work. A project that needs everything in ./target sets `build-dir = "target"` itself.
+build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"
