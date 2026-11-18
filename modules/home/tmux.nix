@@ -25,7 +25,9 @@ in
     };
   };
 
-  systemd.user.services.tmux = lib.mkIf pkgs.stdenv.isLinux {
+  # Not "tmux.service": continuum (boot off) runs `systemctl --user disable tmux.service`
+  # at server start, which deletes a linked unit of that name mid-start.
+  systemd.user.services.tmux-server = lib.mkIf pkgs.stdenv.isLinux {
     Unit.Description = "tmux server";
     Service = {
       Type = "forking";

@@ -27,7 +27,7 @@
         (
           export HOME="$tmpHome" ZDOTDIR="$tmpHome"
           run ${pkgs.curl}/bin/curl -sL https://run.surfpool.run/ \
-            | env PATH=${pkgs.curl}/bin:${pkgs.gzip}/bin:${pkgs.gnutar}/bin:${pkgs.coreutils}/bin:${pkgs.bash}/bin bash
+            | env PATH=${pkgs.curl}/bin:${pkgs.gnugrep}/bin:${pkgs.gzip}/bin:${pkgs.gnutar}/bin:${pkgs.coreutils}/bin:${pkgs.bash}/bin bash
         )
         if [ -x "$tmpHome/.local/bin/surfpool" ]; then
           mkdir -p "$realHome/.local/bin"

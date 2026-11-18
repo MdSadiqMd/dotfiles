@@ -92,11 +92,36 @@ in
       key=${config.sops.secrets.gpg-signing-key.path}
       export PATH="/opt/homebrew/bin:${home}/.nix-profile/bin:$PATH"
       fpr=$(${lib.getExe pkgs.git} config --file ${vars.repoDir}/config/git/config user.signingkey || true)
-      for _ in $(seq 50); do [ -r "$key" ] && break; sleep 0.1; done
+      if [ -r ${config.sops.age.keyFile} ]; then
+        for _ in $(seq 50); do [ -r "$key" ] && break; sleep 0.1; done
+      fi
       if [ -r "$key" ] && [ -n "$fpr" ] && command -v gpg >/dev/null && ! gpg --list-secret-keys "$fpr" >/dev/null 2>&1; then
         run gpg --batch --import "$key"
       fi
     ''
+  );
+
+  # Linux only: before the age key is restored, skip decrypting instead of failing
+  # the unit. A skipped condition is not an error, so activation's `systemctl
+  # restart` still succeeds; the first switch after restoring the key decrypts
+  # everything. (macOS has no systemd; sops-nix's launchd job fails quietly.)
+  systemd.user.services.sops-nix = lib.mkIf pkgs.stdenv.isLinux {
+    Unit.ConditionPathExists = config.sops.age.keyFile;
+  };
+
+  # sops-nix's own Linux step is unordered, so it restarts the unit before this
+  # generation's unit file is linked: a first switch fails ("unit not found") and
+  # later ones decrypt with the previous generation's secrets. Run it once systemd
+  # has the new units. macOS keeps sops-nix's launchd step.
+  home.activation.sops-nix = lib.mkIf pkgs.stdenv.isLinux (
+    lib.mkForce (
+      lib.hm.dag.entryAfter [ "reloadSystemd" ] ''
+        case "$(${config.systemd.user.systemctlPath} --user is-system-running 2>&1 || true)" in
+          running | degraded) run ${config.systemd.user.systemctlPath} --user restart sops-nix ;;
+          *) echo "User systemd not running; sops-nix decrypts at next login." ;;
+        esac
+      ''
+    )
   );
 
   home.sessionVariables.SOPS_AGE_KEY_FILE = config.sops.age.keyFile;

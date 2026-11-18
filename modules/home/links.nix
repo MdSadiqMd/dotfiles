@@ -24,6 +24,7 @@ in
     ".gitconfig" = link "config/git/config";
     ".gitconfig-work" = link "config/git/config-work";
     ".config/git/ignore" = link "config/git/ignore";
+    ".cargo/config.toml" = link "config/cargo/config.toml";
     # One file only: cswap writes through the link, and the rest of this folder holds
     # account emails and login data.
     "${if vars.isDarwin then ".claude-swap-backup" else ".local/share/claude-swap"}/settings.json" =

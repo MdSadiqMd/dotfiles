@@ -12,6 +12,7 @@ let
       bash
       coreutils
       curl
+      gawk # the rtk installer verifies its checksum with awk
       gnugrep
       gnutar
       gzip

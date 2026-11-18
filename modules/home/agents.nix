@@ -27,7 +27,7 @@ in
     (
       cd ${lib.escapeShellArg "${dir}/tools"}
       if ! cmp -s bun.lock node_modules/.bun.lock.installed; then
-        run ${pkgs.bun}/bin/bun install --frozen-lockfile && run cp bun.lock node_modules/.bun.lock.installed
+        run ${(import ../packages.nix pkgs).bun}/bin/bun install --frozen-lockfile && run cp bun.lock node_modules/.bun.lock.installed
       fi
     )
   '';

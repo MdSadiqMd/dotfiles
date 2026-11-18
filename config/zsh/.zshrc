@@ -28,6 +28,7 @@ path=(
   $path
   /opt/homebrew/bin(N/) # Homebrew after nix, so nix wins on overlaps
   /opt/homebrew/sbin(N/)
+  $ANDROID_HOME/emulator(N/) # adb, sdkmanager and avdmanager come from Homebrew
   $NARGO_HOME/bin
   $HOME/.risc0/bin
 )
