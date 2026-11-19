@@ -17,6 +17,7 @@ from the start:
 | Rejection | Prevented by |
 |---|---|
 | "text overlapping", "objects not fitted", "cut off at the top" | containers sized from contents, `box_row`, safe area, **layout lint** (step 7) |
+| "messy", "congested", "no clear spacing" (a title on its first row, labels across a panel border, ragged rows, a panel jammed against the stage) | `card()` / `grid()` / `TC()` build content first and size the box around it; lint checks padding and clearance (animation-craft §3) |
 | "generic / basic animations" (4/10) | every motion says a sentence; physical props; what-if demos (animation-craft.md) |
 | "explanation 5/10", jargon, no thread | premise first, ≤ 3 ideas, one running picture and example (story-and-continuity.md) |
 | "good start, falls apart after 3–4 minutes" | one persistent stage, swap the players, chapters continue (story-and-continuity §3) |
@@ -42,18 +43,20 @@ scene the story plays on.
   rendering. **Read before writing scenes; check when something renders wrong.**
 - [reference/series-code-quizzes.md](reference/series-code-quizzes.md): series, codebases, question rounds.
 
-## Setup (once per machine, skip what exists)
+## Setup
 
 ```bash
 P=<project-dir>; cp -r ~/.claude/skills/manim-explainer/template/. $P && cd $P
-uv tool install manim                       # Manim CE 0.22; render.py calls the `manim` CLI
-# LaTeX: TinyTeX at ~/Library/TinyTeX (render.py adds its bin to PATH). If the installer stalls,
-# curl the tarball directly with retries and extract it by hand.
-uv venv .kokoro --python 3.12
-uv pip install -p .kokoro kokoro soundfile mlx-whisper jiwer \
-  https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+python3 ~/.claude/skills/manim-explainer/setup.py   # < 0.1 s: nix activation already built the toolchain
 ```
-Use `.kokoro/bin/python` for any helper script that needs numpy (system python3 has none).
+The toolchain is per machine, not per project, and nothing in it is pinned: `setup.py` keeps Manim, Kokoro,
+Whisper and their Python on the newest stable releases (a daily job), swapping a new build in only after a
+self-test renders a chapter that uses every template helper and its frames match the last accepted ones. It lives
+in `~/.local/share/manim-explainer/` (`render/` venv, `voice/` venv, `versions.json`); LaTeX comes from nix. Never
+create a `.kokoro` venv, `pip install` Manim, or install TinyTeX. Run every tool with plain `python3`;
+`make_voice.py` and `qa_asr.py` move themselves into the voice venv. For an ad-hoc probe script that needs manim
+or numpy, use `~/.local/share/manim-explainer/render/bin/python`. If a tool misbehaves after an upgrade, run
+`python3 ~/.claude/skills/manim-explainer/setup.py --check` before debugging your scene.
 
 Layout:
 - `research/` (facts tables), `docs/storyboard.md`, `narration.py` (+ `script/epN.py` for a series).
@@ -103,28 +106,74 @@ Copy this checklist into your reply and tick it off as you go:
    - Never read on-screen text aloud. Talk to the viewer ("you", "we", "notice"). Numbers as words.
    - ` | ` = short pause + cue, ` || ` = long pause + cue, wherever an animation should land.
    - Run **clarity-and-flow pass 1** (it includes the story-and-continuity checklist).
-5. **Voice:** `.kokoro/bin/python tools/make_voice.py` → `audio/*.wav`, `durations.json`, `cues.json`; then
-   `.kokoro/bin/python tools/qa_asr.py [prefix]`. Mean WER < 0.05 with only number-formatting flags; respell
+5. **Voice:** `python3 tools/make_voice.py` → `audio/*.wav`, `durations.json`, `cues.json` (only changed lines are
+   re-voiced); then `python3 tools/qa_asr.py [prefix]` (only changed clips are re-transcribed). Mean WER < 0.05 with only number-formatting flags; respell
    mispronounced names and jargon, re-voice, re-check. Foreign names may stay anglicised; say so in the report.
 6. **Scenes.** Subclass `VoiceScene` / `Voice3DScene` / `InterviewScene` from `scenes/common.py`.
    - Wrap each beat in `with self.beat("c1_2") as b:`; `b.cue(i)` right before the animation for segment i;
      `b.span(i, j, frac)` fills the time between cues.
    - Build recurring objects from the domain kit; size containers from their contents; lay out box equations
      with `box_row`; roadmap with `roadmap(steps, current)`; side computations in `panel(w, h, title)`.
+   - Anything with text in a box (a rule, a table, a log, measurements) is a `card(content, title)`: rows via
+     `grid()` (aligned columns) or `VGroup(...).arrange(DOWN, aligned_edge=LEFT)`, coloured lines and numbered
+     items via `TC()` (one baseline). Never `move_to` hand-picked coordinates for rows inside a box.
    - Each chapter starts with a `stage.py` builder that recreates where the last chapter ended; the previous
      chapter ends by settling into that state. `fade_all()` only at act boundaries.
    - The layout lint runs by itself at every cue and beat end. Alias concept colours at the top (`SECRET = P_GOLD`).
-7. **Render + review pass 2:** `python3 tools/render.py ch03` (480p) prints the chapter's **lint warnings** and
-   writes `review/ch03.png`. Then `python3 tools/beat_review.py ch03`: one frame per narration segment beside
-   its words. Fix until lint is clean (or every remaining warning is a deliberate overlap) and every beat frame
-   shows what its sentence says. Check suspect frames at 1080p with `ffmpeg -ss T -i … -frames:v 1 x.png`.
-   Chapters can render in parallel (`xargs -P 4`); each has its own Tex and Text cache.
-8. **Preview + pass 3:** `python3 tools/assemble.py [ep] -q l`, then `python3 tools/freeze_report.py` and the
-   beat sheets of all chapters read in order. Fix every frozen stretch with motion that shows its sentence.
-9. **Final:** `python3 tools/render.py all -q h && python3 tools/assemble.py -q h` (1080p60; `-q p` = 1080p30 for
+7. **Render + review pass 2:** `python3 tools/render.py ch03 ch04` renders the chapters side by side at 480p
+   and, per chapter, prints its **lint warnings** (with positions) and writes the contact sheet `review/ch03.png`
+   and the beat sheet `review/beats_ch03.png` + `.md` (one frame per narration segment beside its words). After
+   a fix, the frames that changed are tiled into `review/beats_ch03_changed.png` (the output names them): review
+   that, not the whole sheet again; unchanged frames are byte-identical to ones you already checked. Fix until
+   lint is clean (or every remaining warning is a deliberate overlap) and every beat frame shows what its
+   sentence says. For 1080p checks, `render.py ch03 -q p` then `python3 tools/beat_review.py ch03 --hd 05 12`
+   (beat-frame numbers from the `.md`), and look at **every card and stage panel at 1080p at its fullest
+   moment**: 480p sheets hid all the spacing faults the user later flagged.
+   `render.py` skips chapters whose inputs haven't changed, so `render.py all` is cheap; `--force` redoes one.
+   Each LaTeX string is compiled once per machine and shared across chapters and projects.
+8. **Preview + pass 3:** `python3 tools/assemble.py [ep] -q l` (seconds: the preview skips loudness mastering, the
+   final doesn't), then `python3 tools/freeze_report.py` and the beat sheets of all chapters read in order. Fix every frozen stretch with motion that shows its sentence.
+9. **Final:** `python3 tools/render.py all -q h && python3 tools/assemble.py -q h` (run it in the background) (1080p60; `-q p` = 1080p30 for
    long films). Assembly does a two-pass loudnorm to −16 LUFS and **fails unless decoded audio length equals video
    length** (±0.15 s). Report the duration, LUFS and the sync line, and show full-resolution frames of the spots
    the user flagged and of the last chapter.
+
+## Working fast
+
+Measured over eleven past videos: about two thirds of the time went to the model thinking and writing, and
+rendering was a small part. So:
+- Don't read template sources to learn the API: use the index below. Open a kit only to copy one helper
+  (`grep -n "def name" -A25 scenes/kit_protocol.py`). Read the reference files once, when the step says so.
+- Plan in the storyboard, then write each scene file directly. Don't draft scene code in your thinking and then
+  write it again.
+- Place things with `arrange`, `next_to`, `card`, `grid`, `box_row`, not hand-computed coordinates. The lint
+  prints positions, so move what it names instead of nudging numbers and re-rendering.
+- Render the chapters you've written in one `render.py` call, read their sheets, and fix everything you found in
+  one edit pass before rendering again.
+- Every image you read stays in context for the rest of the session: after a fix read `*_changed.png`, and a
+  1080p still only for a specific suspect.
+- Long commands (final render, assembly) go in the background; never poll with `sleep`.
+
+## Template API (`scenes/common.py`, `from common import *`)
+
+- Scenes: `VoiceScene`, `Voice3DScene`, `InterviewScene` (`intro`, `qa`). `self.beat(key, gap=0.35)` → `b` with
+  `b.cue(i)`, `b.span(i, j=None, frac=0.85)`, `b.t(frac)`, `b.left()`. `self.drop(*mobs)`,
+  `self.fade_except(*keep)`, `self.fade_all()`.
+- Text: `T(s, size=36, color)` Tex; `M(s, size=40, color)` MathTex; `MC(*parts, size=44, colors={i: c})` with
+  `SYM` symbol colours; `TC((text, color), ...)` one line in several colours; `code(s, size=26)`,
+  `code_col(lines, size=20)` monospace.
+- Containers: `card(content, title=None, pad=0.32, gap=0.26, center)` sized from contents (`.box`, `.content`,
+  `.title`); `grid(rows, col_align="lcr", h_buff, v_buff)`; `panel(w, h, title, center)` for areas filled over time;
+  `label_box(text, w, h, color)`; `box_row(items, y, x=0, buff=0.3)`; `roadmap(steps, current)`.
+- Data: `cell_grid(values)`, `vector_cells(values, color, decimals)`, `hbars(rows, vmax)` → (group, [(bar, text)]),
+  `still(name, height, width)` (ImageMobject), `countdown(scene, seconds)`.
+- Palette: `P_BLUE P_RED P_TEAL P_ORANGE P_PURPLE P_GREEN P_GOLD`, `FOCUS`, `POS`/`NEG`, `DIM`, `SOFT`.
+- `kit_protocol.py`: `Avatar(name, color, kind)` + `.look(target)`, `seat(avatar, side)`, `LockBox(content)` +
+  `.opened()`, `lock_drop`, `die`, `roll_die`, `chip`, `answer_card`, `R_box`, `ticket`, `check_lamp`,
+  `notes_box(items)`, `Table(rows)` + `.cell/.slot/.check_at/.slot_box`, `send(scene, mob, target, arc)`,
+  `ripple`, `Blender` + `swallow`, `program_window`, `key_icon`, `message_card`, `branch`, `fork_paths`,
+  `rewind_glyph`, `strike`, `AnswerPlot` + `plot_point`, `PivotLine`.
+- `kit_nn.py`: `Net(sizes)` + `.flash/.activate/.forward_sweep/.color_edges`, `nudge_arrow(anchor, value)`.
 
 ## Iterating on feedback
 
@@ -161,7 +210,9 @@ Copy this checklist into your reply and tick it off as you go:
   part. Use `fade` / `save_state` / `Restore`; remove parts that should stay gone.
 - **Paths:** build with `fill_opacity=0`; drop duplicate points before `MoveAlongPath`.
 - **Groups:** `self.drop(group)` before re-adding; filter `isinstance(m, VMobject)` before `VGroup(*self.mobjects)`.
-- **Text:** `Write` only short titles; escape LaTeX specials; `code_col` for code.
+- **Text:** `Write` only short titles; escape LaTeX specials; `code_col` for code. `code()` is scaled so its size
+  matches `T()` at the same number (raw Menlo `Text` is 1.7x bigger); in kit code, never call `Text(font="Menlo")`
+  directly. At most two sizes inside one card (title + body).
 - **Gates:** no final render until lint, beat sheets and ASR QA are clean.
 - **Length:** clarity beats brevity (accepted films ran 9–32 min); segment long ones (planning §3).
 

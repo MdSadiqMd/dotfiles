@@ -67,6 +67,8 @@ in
     brews = [
       "b2-tools"
       "blueutil"
+      # cairo + pkgconf: pycairo (Manim, manim-explainer skill) has no macOS wheels and builds against them
+      "cairo"
       "cocoapods"
       "fastfetch"
       "ffmpeg"
@@ -81,6 +83,7 @@ in
       "openjdk"
       "openjdk@17"
       "pinentry-mac"
+      "pkgconf"
       "rtk"
       "solana"
       "tree"

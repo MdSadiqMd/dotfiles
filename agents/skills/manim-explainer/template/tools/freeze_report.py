@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,15 +25,19 @@ def probe(path):
 
 
 def main():
-    log = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(ROOT / "review/full_preview.mp4"), "-vf",
-                          "freezedetect=n=0.001:d=3", "-map", "0:v", "-f", "null", "-"],
-                         capture_output=True, text=True).stderr
+    # the freeze scan decodes the whole preview; the chapter probes run alongside it
+    scan = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", str(ROOT / "review/full_preview.mp4"), "-vf",
+                             "freezedetect=n=0.001:d=3", "-map", "0:v", "-f", "null", "-"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    with ThreadPoolExecutor(8) as pool:
+        lengths = list(pool.map(lambda k: probe(output(k, "l")), ORDER))
+    log = scan.communicate()[1]
     starts = re.findall(r"freeze_start: ([0-9.]+)", log)
     durs = re.findall(r"freeze_duration: ([0-9.]+)", log)
     offsets, t = {}, 0.0
-    for k in ORDER:
+    for k, length in zip(ORDER, lengths):
         offsets[k] = t
-        t += probe(output(k, "l"))
+        t += length
     beat_times = {f.stem: float(f.read_text()) for f in (ROOT / "review/beat_times").glob("*.txt")}
     cues = json.loads((ROOT / "cues.json").read_text())
     total = 0.0

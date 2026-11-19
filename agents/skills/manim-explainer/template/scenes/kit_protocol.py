@@ -5,7 +5,7 @@ and every object carries a meaning (see reference/animation-craft.md):
 - Avatar: a character with eyes that follow the action (`look`). kind="forger" adds a mask.
 - LockBox / lock_drop: a value sealed in a padlock box (a commitment, a public key). The number shows faintly
   for the viewer only; `opened()` lifts the shackle (no glow).
-- chip / card / R_box: a challenge, an answer and a small commitment box, all sized to fit a Table slot.
+- chip / answer_card / R_box: a challenge, an answer and a small commitment box, all sized to fit a Table slot.
 - Table: the transcript, one row per run, slots sized from the largest token, check column on the right.
 - notes_box: a character's private values ("x = 7", "k = 5", a seed), instead of numbers floating near a head.
 - send / roll_die / ripple / swallow: messages travel on an arc with a fading trail, dice tumble and land,
@@ -93,8 +93,8 @@ def chip(value, color, r=0.3, size=34):
     return g
 
 
-def card(value, color, size=34):
-    """An answer: a small card with the number written on it."""
+def answer_card(value, color, size=34):
+    """An answer: a small card with the number written on it. (Not `card`: that is common.card, the panel.)"""
     n = M(str(value), size, color)
     c = RoundedRectangle(corner_radius=0.1, width=max(0.85, n.width + 0.35), height=0.62, stroke_color=color,
                          stroke_width=3.5, fill_color=color, fill_opacity=0.14).move_to(n)

@@ -57,6 +57,23 @@ sum), so the viewer sees where every number comes from.
 - **Size containers from their contents, never the reverse.** Table slots are sized from the largest token
   (the padlock box *with* its shackle) plus padding, and every token is centred on its slot (`Table.cell(r, c)`).
   A note pill gets a box that is measured around it (`notes_box`), never a fixed-size card.
+- **Boxes with text are built content-first.** Rejected frames (Bluetooth film): a panel title sitting on its
+  first row, socket labels straddling a panel's bottom border, a rule card whose numbers floated far from their
+  lines with uneven row gaps, and that card jammed into the gap between the chapter tag and the stage. All of
+  them came from one habit: a fixed `panel(w, h)` and every row `move_to`'d to a hand-typed coordinate. Do this
+  instead:
+  - `card(content, title)`: the box is measured around title + content with `pad` 0.32 and `gap` 0.26.
+  - Rows: `grid([[label, value, ...], ...], col_align="ll…")` for anything with columns (built on
+    `arrange_in_grid`), else `VGroup(rows).arrange(DOWN, buff=0.22, aligned_edge=LEFT)`. Equal row gaps, always.
+  - One line in several colours, or a numbered item: one `TC((r"1.\quad ", FOCUS), ("text ", GREY_A),
+    ("word", CALL))`. Separate `T()` pieces arranged with `aligned_edge=DOWN` put a word with a descender
+    ("output") above its neighbours; a separate number mobject sits off the text's baseline.
+  - A number and its unit are one string (`code("0.18 s")`), never a big number with a tiny unit beside it.
+  - Labels belong to their container: a socket's label goes *inside* the box, and the box is sized to hold it.
+  - Leave the stage alone: a card goes where it has ≥ 0.15 clearance from every stage object (the lint flags
+    < 0.1). If the idea area is too small for the card, dim or move the stage, or split the card over two beats;
+    never shrink the gap.
+  - Type: at most two sizes per card (title 24, body 20). `code()` and `T()` at the same number now match.
 - **Align on the meaningful part.** A padlock box's centre is its body, not its bounding box (the shackle sits on
   top). Lay out equations of boxes with `box_row`, which aligns on `.body`.
 - **Safe area.** Keep everything, labels included, inside x ±6.9 and y ±3.7. Anything placed near the top edge
@@ -66,9 +83,12 @@ sum), so the viewer sees where every number comes from.
 - **Two runs are two rows, never stacked ghosts.** v4 shrank run-1 tokens into slot corners when run 2 arrived
   (overlapping ghosts). v6 gives each run its own table row and wraps the shared column with one outline.
 - **Run the layout lint.** `common.lint` runs at every cue and at the end of every beat (no extra code in
-  scenes) and writes `review/lint/<beat>.txt`; `render.py` prints the warnings per chapter. It flags anything
-  outside the frame, labels overlapping, a label half-covered by a filled shape, and a filled shape poking out
-  of another. It caught a forger never seated (it sat in the middle of the table), fine print colliding with the
+  scenes) and writes `review/lint/<beat>.txt`; `render.py` prints each distinct warning once with the beats it
+  spans. It flags anything outside the frame, labels overlapping or touching (< 0.06 apart when stacked), a
+  label half-covered by a filled shape, a filled shape poking out of another, and for every box that holds a
+  label, whatever its fill: a label crossing its edge, a label with < 0.1 padding, and anything outside it
+  closer than 0.1. (Before this, a panel with fill under 0.15 was invisible to the lint, so all three flagged
+  Bluetooth-film frames passed.) It caught a forger never seated (it sat in the middle of the table), fine print colliding with the
   table, and a seed die rendered as a solid square. Deliberate overlaps (area-model strips crossing, a
   double-chevron icon) can stay: say so when you report. Mark a shape `lint_skip = True` to silence it.
 

@@ -330,6 +330,15 @@ let
       };
       darwinOnly = true;
     };
+    # manim-explainer skill: moves Manim, Kokoro, Whisper and their Python to the newest releases, but only after
+    # its self-test passes (a held upgrade posts a notification). A no-op takes seconds.
+    manim-explainer-upgrade = {
+      command = "python3 ${vars.repoDir}/agents/skills/manim-explainer/setup.py --upgrade";
+      at = {
+        hour = 4;
+        minute = 30;
+      };
+    };
     # Stale build output and oversized package caches; `DRY_RUN=1 just clean` previews it.
     dev-cleanup = {
       script = "jobs/dev-cleanup.sh";

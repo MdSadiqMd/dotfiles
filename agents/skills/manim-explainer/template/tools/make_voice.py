@@ -1,6 +1,6 @@
 """Render every narration beat with Kokoro (voice af_heart) into audio/<key>.wav.
 
-Run with the Kokoro venv:  .kokoro/bin/python tools/make_voice.py
+Run:  python3 tools/make_voice.py   (re-runs itself in the voice venv that setup.py builds)
 
 Delivery is built sentence by sentence with deliberate pauses (longer after questions),
 so it sounds explained rather than read. Narration text may contain cue markers:
@@ -15,8 +15,14 @@ import re
 import sys
 from pathlib import Path
 
-import numpy as np
-import soundfile as sf
+from env import hf_offline, quiet_torch, voice_python
+
+hf_offline("hexgrad/Kokoro-82M")  # before anything imports huggingface_hub
+voice_python("kokoro")
+quiet_torch()
+
+import numpy as np  # noqa: E402
+import soundfile as sf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -59,7 +65,10 @@ def sentences(seg):
 
 
 def speak(pipe, sentence):
-    chunks = [a.numpy() if hasattr(a, "numpy") else a for _, _, a in pipe(sentence, voice=VOICE, speed=SPEED)]
+    # Kokoro yields Result objects (.audio) that also unpack as (graphemes, phonemes, audio) tuples
+    outs = [getattr(r, "audio", None) if getattr(r, "audio", None) is not None else r[2]
+            for r in pipe(sentence, voice=VOICE, speed=SPEED)]
+    chunks = [a.numpy() if hasattr(a, "numpy") else np.asarray(a) for a in outs if a is not None]
     return trim(np.concatenate(chunks))
 
 
@@ -107,7 +116,10 @@ def main():
             if not (out.exists() and cache.get(key) == sig and key in all_cues):
                 if pipe is None:
                     from kokoro import KPipeline
-                    pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
+                    try:
+                        pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
+                    except TypeError:  # releases without the repo_id argument
+                        pipe = KPipeline(lang_code="a")
                 audio, cues = build(pipe, text)
                 sf.write(out, audio, SR)
                 cache[key] = sig

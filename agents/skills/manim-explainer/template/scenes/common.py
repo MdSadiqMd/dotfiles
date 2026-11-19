@@ -10,8 +10,8 @@ import numpy as np
 from manim import *
 from PIL import Image as _PILImage
 
-# Manim CE 0.22 builds its image canvas with Image.fromarray(np.zeros((h, w)), mode="RGBA"),
-# which Pillow 13 rejects. Serve that one call with the transparent canvas it intends.
+# Manim CE 0.22.0 builds its image canvas with Image.fromarray(np.zeros((h, w)), mode="RGBA"), which Pillow 13
+# rejects (fixed in 0.22.1). Serve that one call with the transparent canvas it intends; other calls pass through.
 _pil_fromarray = _PILImage.fromarray
 
 
@@ -56,7 +56,7 @@ class Beat:
         self.dur = DUR[key]
 
     def __enter__(self):
-        self.start = self.scene.renderer.time
+        self.start = self.scene.time
         self.scene.add_sound(str(AUDIO / f"{self.key}.wav"))
         # beat start times for tools/beat_review.py and tools/freeze_report.py; one file per beat, so chapters
         # rendering in parallel never race on a shared file
@@ -73,7 +73,7 @@ class Beat:
         """Hold until narration segment i (split by | in narration.py) starts, so the next animation lands on it."""
         lint(self.scene, f"{self.key}[{max(0, i - 1)}->]")
         target = self.start + CUES[self.key][i]
-        rem = target - self.scene.renderer.time
+        rem = target - self.scene.time
         if rem > 0.03:
             self.scene.wait(rem)
 
@@ -84,7 +84,7 @@ class Beat:
         return max(0.2, (end - cues[i]) * frac)
 
     def left(self):
-        return self.start + self.dur - self.scene.renderer.time
+        return self.start + self.dur - self.scene.time
 
     def __exit__(self, kind, *_):
         if kind is None:
@@ -135,6 +135,16 @@ def M(s, size=40, color=WHITE, **kw):
     return MathTex(s, font_size=size, color=color, **kw)
 
 
+def TC(*parts, size=36):
+    """One line of prose in several colours: TC(("default input is ", GREY_A), ("Bluetooth", CALL)).
+    A single Tex, so every part shares one baseline. Never build a coloured line from separate T() pieces
+    arranged with aligned_edge=DOWN: a word with a descender ("output") then sits higher than its neighbours."""
+    m = Tex(*[t for t, _ in parts], font_size=size)
+    for sub, (_, c) in zip(m, parts):
+        sub.set_color(c)
+    return m
+
+
 SYM = {}  # symbol -> concept colour, e.g. SYM.update({"x": SECRET, "e": CHAL}); used by MC
 
 
@@ -182,9 +192,14 @@ def vector_cells(values, color, cell=0.42, direction=DOWN, buff=0.04, decimals=N
     return cells
 
 
+# Menlo Text at a given font_size has 1.7x the x-height of Tex at the same font_size (measured), so a code() and
+# a T() of the same nominal size looked mismatched (a "17" label beside a "21" value read as twice the size).
+MONO_SCALE = 1 / 1.7
+
+
 def code(s, size=26, color=GREY_A):
-    """Monospace code/identifier text: no LaTeX escaping."""
-    return Text(s, font="Menlo", font_size=size, color=color)
+    """Monospace code/identifier text: no LaTeX escaping. Same visual size as T() at the same `size`."""
+    return Text(s, font="Menlo", font_size=size * MONO_SCALE, color=color)
 
 
 def code_col(lines, size=20, color=GREY_A, buff=0.1):
@@ -309,8 +324,36 @@ class InterviewScene(VoiceScene):
         self.play(FadeOut(VGroup(tag, q, rule, lines)), run_time=0.6)
 
 
+def grid(rows, col_align=None, h_buff=0.45, v_buff=0.3):
+    """A table of mobjects with aligned columns: rows = [[label, value, ...], ...]. Column widths come from the
+    widest cell, so nothing is placed at hand-picked x coordinates. col_align is one of l/c/r per column."""
+    cells = [m for row in rows for m in row]
+    ncol = len(rows[0])
+    return VGroup(*cells).arrange_in_grid(rows=len(rows), cols=ncol, buff=(h_buff, v_buff),
+                                          col_alignments=col_align or "l" * ncol)
+
+
+def card(content, title=None, pad=0.32, gap=0.26, center=ORIGIN, min_width=0):
+    """A panel sized from its contents: title on top, `content` (one mobject, e.g. a grid() or a VGroup of
+    rows arranged DOWN) below it after `gap`, and the box `pad` outside both. Content is built first and the box
+    is measured around it, so a title can never collide with the first row and no label can cross the border.
+    Add rows later with card.fit() after changing content (it re-measures the box)."""
+    body = VGroup(content)
+    if title:
+        t = T(title, 24, GREY_B)
+        body = VGroup(t, content).arrange(DOWN, buff=gap, aligned_edge=LEFT)
+    box = RoundedRectangle(corner_radius=0.22, width=max(min_width, body.width + 2 * pad),
+                           height=body.height + 2 * pad, stroke_color=GREY_D, stroke_width=2.5,
+                           fill_color=GREY_E, fill_opacity=0.35).move_to(body)
+    g = VGroup(box, body).move_to(center)
+    g.box, g.content, g.title = box, content, (body[0] if title else None)
+    return g
+
+
 def panel(w, h, title=None, center=ORIGIN):
-    """A framed work area with a small grey title inside its top-left corner (e.g. "Bob checks")."""
+    """A framed work area with a small grey title inside its top-left corner (e.g. "Bob checks"). Use it only for
+    an area that is filled and emptied over time (a side computation). For anything whose contents are known when
+    it appears (a rule, a table, a log, measurements) use card(), which is sized from its contents."""
     box = RoundedRectangle(corner_radius=0.22, width=w, height=h, stroke_color=GREY_D, stroke_width=2.5,
                            fill_color=GREY_E, fill_opacity=0.35).move_to(center)
     g = VGroup(box)
@@ -343,13 +386,19 @@ def box_row(items, y, x=0.0, buff=0.3):
 
 
 # ------------------------------------------------------------------ layout lint
+def _types(*names):
+    """The Manim classes among `names` that this Manim version has (a renamed class just drops out)."""
+    import manim
+    return tuple(c for c in (getattr(manim, n, None) for n in names) if isinstance(c, type))
+
+
 _TEXT_TYPES = None
 
 
 def _text_units(mob, out):
     global _TEXT_TYPES
     if _TEXT_TYPES is None:
-        _TEXT_TYPES = (SingleStringMathTex, Text, MarkupText, DecimalNumber, Integer)
+        _TEXT_TYPES = _types("SingleStringMathTex", "Text", "MarkupText", "DecimalNumber", "Integer")
     if isinstance(mob, _TEXT_TYPES):
         out.append(mob)
         return
@@ -357,8 +406,18 @@ def _text_units(mob, out):
         _text_units(sm, out)
 
 
+def _bounds(m):
+    """(x0, y0, x1, y1) from the points Manim itself uses for get_corner (anchors of every VMobject in the family)."""
+    pts = m.get_points_defining_boundary()
+    if len(pts) == 0:
+        return (0.0, 0.0, 0.0, 0.0)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    return (lo[0], lo[1], hi[0], hi[1])
+
+
 def _bbox(m):
-    return m.get_corner(DL)[:2], m.get_corner(UR)[:2]
+    x0, y0, x1, y1 = _bounds(m)
+    return (x0, y0), (x1, y1)
 
 
 def _visible(m):
@@ -369,71 +428,156 @@ def _visible(m):
 
 
 def _label(m):
-    return (getattr(m, "tex_string", None) or getattr(m, "text", None) or type(m).__name__)[:28]
+    """'text' at (x,y): the position saves working out which of several copies the warning means."""
+    x, y = m.get_center()[:2]
+    return f"'{(getattr(m, 'tex_string', None) or getattr(m, 'text', None) or type(m).__name__)[:28]}' at ({x:.2f},{y:.2f})"
+
+
+class _Leaf:
+    """One drawn VMobject, measured once per lint pass."""
+    __slots__ = ("m", "box", "visible", "fill", "_wh")
+
+    def __init__(self, m):
+        self.m = m
+        self.box = _bounds(m)
+        self.fill = m.get_fill_opacity()
+        self.visible = max(self.fill, m.get_stroke_opacity()) > 0.3
+        self._wh = None
+
+    @property
+    def wh(self):  # Manim's width/height count curve handles too, unlike the boundary; ask Manim, once
+        if self._wh is None:
+            self._wh = (self.m.width, self.m.height)
+        return self._wh
+
+
+def _pairs(a, b):
+    """Overlap area and the inputs of every test below, for all pairs of boxes a[i], b[j] at once.
+    Same float operations, in the same order, as the scalar formulas they replace, so results are identical."""
+    ax0, ay0, ax1, ay1 = (a[:, k][:, None] for k in range(4))
+    bx0, by0, bx1, by1 = (b[:, k][None, :] for k in range(4))
+    w = np.minimum(ax1, bx1) - np.maximum(ax0, bx0)
+    h = np.minimum(ay1, by1) - np.maximum(ay0, by0)
+    return np.maximum(0, w) * np.maximum(0, h), (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1), w
+
+
+def _inside(a, b, tol):
+    """a inside b (+tol), for broadcast box coordinates."""
+    (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1) = a, b
+    return (ax0 >= bx0 - tol) & (ay0 >= by0 - tol) & (ax1 <= bx1 + tol) & (ay1 <= by1 + tol)
 
 
 def lint(scene, where):
     """Write layout problems at a rest point (a cue or the end of a beat) to review/lint/<beat>.txt:
-    anything outside the frame, two labels overlapping, a label half-covered by a filled shape, and a
-    filled shape poking half out of another one."""
-    tops = [m for m in scene.mobjects if m is not getattr(scene.camera, "frame", None)]
+    anything outside the frame, two labels overlapping or touching, a label half-covered by a filled shape, a
+    filled shape poking half out of another one, and for every box that holds a label: a label crossing its edge,
+    a label with < 0.1 padding inside it, and anything outside it closer than 0.1.
+
+    Every mobject is measured once and the pair tests run as numpy matrices (a 600-cell grid is 360k shape pairs
+    per rest point); issues come out in the same order as the nested loops they replace."""
+    frame = getattr(scene.camera, "frame", None)
+    tops = [m for m in scene.mobjects if m is not frame]
+    fams = [t.get_family() for t in tops]
     texts = []
     for t in tops:
         _text_units(t, texts)
     text_ids = {id(f) for t in texts for f in t.get_family()}
     texts = [t for t in texts if _visible(t)]
-    shapes = []
-    for t in tops:
-        for f in t.get_family():
-            if (isinstance(f, VMobject) and not f.submobjects and len(f.points) and id(f) not in text_ids
-                    and f.get_fill_opacity() >= 0.15 and f.width > 0.15 and f.height > 0.15):
-                shapes.append(f)
+    leaves = {}  # id -> _Leaf, for every VMobject leaf with points
+    for fam in fams:
+        for f in fam:
+            if id(f) not in leaves and isinstance(f, VMobject) and not f.submobjects and len(f.points):
+                leaves[id(f)] = _Leaf(f)
     issues = []
-    for t in tops:
-        for f in t.get_family():
-            if isinstance(f, VMobject) and not f.submobjects and len(f.points) and _visible(f):
-                (x0, y0), (x1, y1) = _bbox(f)
+    for fam in fams:
+        for f in fam:
+            lf = leaves.get(id(f))
+            if lf is not None and lf.visible:
+                x0, y0, x1, y1 = lf.box
                 if x0 < -7.05 or x1 > 7.05 or y0 < -3.97 or y1 > 3.97:
                     issues.append(f"out of frame: {type(f).__name__} at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
                     break
+    shapes = [lf for fam in fams for f in fam
+              if (lf := leaves.get(id(f))) is not None and id(f) not in text_ids and lf.fill >= 0.15
+              and lf.wh[0] > 0.15 and lf.wh[1] > 0.15]
+    T = np.array([_bounds(t) for t in texts], dtype=float).reshape(-1, 4)
+    S = np.array([lf.box for lf in shapes], dtype=float).reshape(-1, 4)
+    t_area = (T[:, 2] - T[:, 0]) * (T[:, 3] - T[:, 1])
+    s_area = (S[:, 2] - S[:, 0]) * (S[:, 3] - S[:, 1])
+    upper = np.triu(np.ones((len(T), len(T)), dtype=bool), 1)
 
-    def inter(a, b):
-        (ax0, ay0), (ax1, ay1) = a
-        (bx0, by0), (bx1, by1) = b
-        w = min(ax1, bx1) - max(ax0, bx0)
-        h = min(ay1, by1) - max(ay0, by0)
-        return max(0, w) * max(0, h)
+    ov_tt, ta, tb, _ = _pairs(T, T)
+    min_area = np.minimum(t_area[:, None], t_area[None, :])
+    for i, j in np.argwhere(upper & (ov_tt > 0.12 * min_area) & (ov_tt > 0.004)):
+        issues.append(f"labels overlap: {_label(texts[i])} / {_label(texts[j])}")
 
-    def area(a):
-        return (a[1][0] - a[0][0]) * (a[1][1] - a[0][1])
+    ov_ts, ta_s, sb_s, _ = _pairs(T, S)
+    hit = (ov_ts > 0.08 * t_area[:, None]) & (ov_ts > 0.004) & ~_inside(ta_s, sb_s, 0.03)
+    for i, j in np.argwhere(hit):
+        x0, y0, x1, y1 = S[j]
+        issues.append(f"label half-covered: {_label(texts[i])} by {type(shapes[j].m).__name__} "
+                      f"at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
 
-    def inside(a, b, tol=0.03):
-        return a[0][0] >= b[0][0] - tol and a[0][1] >= b[0][1] - tol and a[1][0] <= b[1][0] + tol and a[1][1] <= b[1][1] + tol
+    ov_ss, sa, sb, _ = _pairs(S, S)
+    row_ok = np.array([s_area[i] >= 0.04 and not isinstance(lf.m, Triangle) and not getattr(lf.m, "lint_skip", False)
+                       for i, lf in enumerate(shapes)], dtype=bool)
+    hit = (row_ok[:, None] & (s_area[:, None] < s_area[None, :]) & (ov_ss > 0.15 * s_area[:, None])
+           & ~_inside(sa, sb, 0.04))
+    np.fill_diagonal(hit, False)
+    for i, j in np.argwhere(hit):
+        x0, y0, x1, y1 = S[i]
+        issues.append(f"shape pokes out: {type(shapes[i].m).__name__} over {type(shapes[j].m).__name__} "
+                      f"at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
 
-    tb = [(t, _bbox(t)) for t in texts]
-    for i in range(len(tb)):
-        for j in range(i + 1, len(tb)):
-            a, b = tb[i][1], tb[j][1]
-            ov = inter(a, b)
-            if ov > 0.12 * min(area(a), area(b)) and ov > 0.004:
-                issues.append(f"labels overlap: '{_label(tb[i][0])}' / '{_label(tb[j][0])}'")
-    sb = [(s_, _bbox(s_)) for s_ in shapes]
-    for t, a in tb:
-        for s_, b in sb:
-            ov = inter(a, b)
-            if ov > 0.08 * area(a) and ov > 0.004 and not inside(a, b):
-                issues.append(f"label half-covered: '{_label(t)}' by {type(s_).__name__}")
-    for i in range(len(sb)):
-        for j in range(len(sb)):
-            if i == j:
-                continue
-            a, b = sb[i][1], sb[j][1]
-            if area(a) >= area(b) or area(a) < 0.04 or isinstance(sb[i][0], Triangle) or getattr(sb[i][0], 'lint_skip', False):
-                continue
-            ov = inter(a, b)
-            if ov > 0.15 * area(a) and not inside(a, b, tol=0.04):
-                issues.append(f"shape pokes out: {type(sb[i][0]).__name__} over {type(sb[j][0]).__name__} "
-                              f"at ({(a[0][0] + a[1][0]) / 2:.2f},{(a[0][1] + a[1][1]) / 2:.2f})")
+    # Stacked labels that touch: horizontally overlapping and less than 0.06 apart vertically (a panel title sitting
+    # on its first row). The area test above misses these because the overlap is a thin sliver.
+    (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1) = ta, tb
+    ho = np.minimum(ax1, bx1) - np.maximum(ax0, bx0)
+    vg = np.maximum(by0 - ay1, ay0 - by1)
+    t_w = T[:, 2] - T[:, 0]
+    hit = upper & (ho > 0.3 * np.minimum(t_w[:, None], t_w[None, :])) & (vg < 0.06) & (ov_tt <= 0.12 * min_area)
+    for i, j in np.argwhere(hit):
+        issues.append(f"labels touch: {_label(texts[i])} / {_label(texts[j])}")
+
+    # Containers: any visible rectangle that holds a label, whatever its fill (a 0.12-fill panel was invisible to
+    # every check above, so labels straddling its border passed). A label must sit inside with >= 0.1 padding,
+    # and nothing outside may come within 0.1 of the box (a panel butting into the stage below it).
+    rects = [lf for fam in fams for f in fam
+             if (lf := leaves.get(id(f))) is not None and isinstance(f, Rectangle) and lf.visible
+             and lf.wh[0] > 0.6 and lf.wh[1] > 0.4 and not getattr(f, "lint_skip", False)]
+    if rects and len(T):
+        R = np.array([lf.box for lf in rects], dtype=float)
+        holds = _inside(*_pairs(T, R)[1:3], 0).any(axis=0)
+        boxes = [(lf, R[k]) for k, lf in enumerate(rects) if holds[k]]
+    else:
+        boxes = []
+    near = [lf for fam in fams for f in fam
+            if (lf := leaves.get(id(f))) is not None and lf.visible and id(f) not in text_ids
+            and (lf.box[2] - lf.box[0]) * (lf.box[3] - lf.box[1]) >= 0.03]
+    L = np.array([lf.box for lf in near], dtype=float).reshape(-1, 4)
+    for box, cb in boxes:
+        bx0, by0, bx1, by1 = cb
+        name = f"box at ({(bx0 + bx1) / 2:.2f},{(by0 + by1) / 2:.2f})"
+        x0, y0, x1, y1 = T[:, 0], T[:, 1], T[:, 2], T[:, 3]
+        ins = (x0 >= bx0) & (y0 >= by0) & (x1 <= bx1) & (y1 <= by1)
+        pad = np.minimum(np.minimum(x0 - bx0, y0 - by0), np.minimum(bx1 - x1, by1 - y1))
+        ov = np.maximum(0, np.minimum(x1, bx1) - np.maximum(x0, bx0)) * np.maximum(0, np.minimum(y1, by1) - np.maximum(y0, by0))
+        gap = np.maximum(np.maximum(bx0 - x1, x0 - bx1), np.maximum(by0 - y1, y0 - by1))
+        for i in range(len(T)):
+            if ins[i]:
+                if pad[i] < 0.1:
+                    issues.append(f"label cramped in {name}: {_label(texts[i])} (pad {pad[i]:.2f})")
+            elif ov[i] > 0:
+                issues.append(f"label crosses edge of {name}: {_label(texts[i])}")
+            elif gap[i] < 0.1:
+                issues.append(f"label crowds {name}: {_label(texts[i])}")
+        x0, y0, x1, y1 = L[:, 0], L[:, 1], L[:, 2], L[:, 3]
+        skip = (((x0 >= bx0) & (y0 >= by0) & (x1 <= bx1) & (y1 <= by1))
+                | ((bx0 >= x0) & (by0 >= y0) & (bx1 <= x1) & (by1 <= y1)))
+        gap = np.maximum(np.maximum(bx0 - x1, x0 - bx1), np.maximum(by0 - y1, y0 - by1))
+        for k in np.flatnonzero(~skip & (gap < 0.1)):
+            if near[k] is not box:
+                issues.append(f"{type(near[k].m).__name__} crowds {name}")
     if issues:
         out = ROOT / "review" / "lint"
         out.mkdir(parents=True, exist_ok=True)

@@ -67,6 +67,28 @@ in
     (if stdenv.isDarwin then ghostty-bin else lib.hiPrio ghostty)
     bun'
     imagemagick # image.nvim renders through `magick`
+    # LaTeX for Manim's Tex/MathTex (manim-explainer skill): the default template plus what TinyTeX had.
+    (texliveSmall.withPackages (
+      ps: with ps; [
+        standalone
+        preview
+        doublestroke
+        relsize
+        physics
+        rsfs
+        wasysym
+        everysel
+        setspace
+        ragged2e
+        calligra
+        dvisvgm
+        cm-super
+        tipa
+        microtype
+        babel-english
+        amsfonts
+      ]
+    ))
     lua-language-server
     stylua
 

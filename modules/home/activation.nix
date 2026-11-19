@@ -6,13 +6,13 @@
 }:
 {
   home.activation = {
-    # manim-explainer skill: manim CLI and the shared Kokoro/Whisper venv, once per machine (setup.sh pins
-    # versions). Guarded by two existence checks; a failed install (offline) is retried on the next switch.
+    # manim-explainer skill: Manim and the Kokoro/Whisper venv on the newest versions that pass its self-test,
+    # built once per machine (the manim-explainer-upgrade job keeps them current). setup.py returns at once when
+    # the toolchain exists; a failed build (offline) is retried on the next switch.
     installManimExplainer = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-      if [ ! -x "$HOME/.local/bin/manim" ] || [ ! -x "''${XDG_DATA_HOME:-$HOME/.local/share}/manim-explainer/venv/bin/python" ]; then
-        run env UV=${pkgs.uv}/bin/uv ${pkgs.bash}/bin/bash ${vars.repoDir}/agents/skills/manim-explainer/setup.sh \
-          || echo "warning: manim-explainer setup failed (offline?); next switch retries"
-      fi
+      PATH="$PATH:/opt/homebrew/bin" run env UV=${pkgs.uv}/bin/uv ${pkgs.python3}/bin/python3 \
+        ${vars.repoDir}/agents/skills/manim-explainer/setup.py \
+        || echo "warning: manim-explainer setup failed (offline?); next switch retries"
     '';
 
     # Unpinned: a pin lands in uv's receipt and would block `cswap upgrade`. --python

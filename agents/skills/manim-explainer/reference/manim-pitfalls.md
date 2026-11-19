@@ -1,4 +1,4 @@
-# Manim CE 0.22 pitfalls (each one cost a render)
+# Manim CE pitfalls (each one cost a render)
 
 ## Opacity and fill
 - `set_opacity(x)` sets fill *and* stroke. On outline shapes (`Circle`, `RoundedRectangle`, `Triangle`) it
@@ -32,12 +32,19 @@
 - LaTeX needs `\%`, `\_`, `\&`, `\$`; use `\texttt{}` for inline code. In Python strings use raw strings or
   `\\` (a `"\cdot"` in a normal string triggers an invalid-escape warning).
 - `Text` drops leading spaces and blank lines; use `code_col` for code.
+- `Text` (Pango) and `Tex` use different size scales: Menlo `Text` at `font_size` n has 1.7x the x-height of
+  `Tex` at n (measured). Use `code()`, which corrects for it, so a label and its value at the same size match.
+- Separate text mobjects in a row align by bounding box, not baseline (`arrange` centres them,
+  `aligned_edge=DOWN` aligns descenders). Put everything that reads as one line in one `Tex` (`TC`/`MC`).
 - Custom fonts: `manimpango.register_font(path)` before creating `Text`. Fonts are rarely needed: the 3b1b look
   is LaTeX.
 
 ## Rendering
+- The toolchain upgrades itself to new Manim releases, so use only Manim's public API: `self.time`, not
+  `self.renderer.time` (Manim 0.22 began moving rendering into a `Manager`); no private `_attributes`.
 - Parallel chapter renders race on the shared Tex and Text caches ("ParseError: no element found"); the
-  template's `render.py` gives each chapter its own `tex_dir` and `text_dir`.
+  template's `render.py` gives each chapter its own `tex_dir` and `text_dir` under `media/cache/`. Never put a
+  folder inside `media/Tex`: Manim's LaTeX cleanup unlinks everything there that isn't an .svg, and crashes.
 - Anything shared between parallel renders (logs, timing files) must be one file per beat or chapter.
 - Pillow ≥13 breaks Manim's image canvas; keep the shim at the top of `common.py`.
 - Brew ffmpeg has no `drawtext`, so contact sheets are unlabeled; `beat_review.py` writes the matching text to

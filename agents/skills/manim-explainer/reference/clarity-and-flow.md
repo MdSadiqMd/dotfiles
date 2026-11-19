@@ -23,10 +23,11 @@ Three checks, in this order:
 1. **Layout lint.** `render.py` prints the chapter's lint warnings (from `review/lint/`). Fix each one or confirm
    it is a deliberate overlap.
 2. **Contact sheet** `review/chNN.png`: the frames alone, with no audio (the checklist below).
-3. **Beat sheet** `python3 tools/beat_review.py chNN`: one frame per narration segment next to its words
-   (`review/beats_chNN.png` + `.md`). For every segment ask: does this frame show what this sentence says, is the
+3. **Beat sheet** (`render.py` builds it; `python3 tools/beat_review.py chNN` rebuilds it): one frame per narration
+   segment next to its words (`review/beats_chNN.png` + `.md`; after a fix, only the changed frames in
+   `review/beats_chNN_changed.png`). For every segment ask: does this frame show what this sentence says, is the
    newest thing the thing being named, and is anything misfitted (overflowing, half-covered, cut off, ghosted)?
-   Check suspicious spots at full resolution: `ffmpeg -ss T -i media/videos/<ch>/1080p60/ChNN.mp4 -frames:v 1 x.png`.
+   Check suspicious spots at full resolution: `python3 tools/beat_review.py chNN --hd 05 12` (after a 1080p render).
 
 - [ ] You can tell what the chapter is about from the frames alone.
 - [ ] Each frame has one obvious focal point; everything else is dimmed or gone.
@@ -35,6 +36,8 @@ Three checks, in this order:
 - [ ] Colors and places match the semantics in the storyboard.
 - [ ] Each beat shows motion (transform, grow, dim, push in). No static slides.
 - [ ] Every token fits its slot or box with padding; nothing pokes out, overflows a card, or covers a label.
+- [ ] Every card at 1080p, at its fullest: title clear of the first row, equal row gaps, columns aligned, one
+      baseline per line, ≤ 2 type sizes, and clear air between the card and the stage around it.
 - [ ] No glow, no stray copies left behind after a move, nothing within 0.3 of the frame edge.
 
 ## Pass 3: cold watch (the assembled `-q l` preview, at 1×, start to finish)
