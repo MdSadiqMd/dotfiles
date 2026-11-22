@@ -42,14 +42,9 @@
       }
     ]
   },
-  "statusLine": {
-    "type": "command",
-    "command": "\"$HOME/.claudemon/statusline.sh\""
-  },
   "enabledPlugins": {
     "beads@beads-marketplace": true,
     "caveman@caveman": true,
-    "claudemon@claudemon": true,
     "gopls-lsp@claude-plugins-official": true,
     "localstack@localstack-dev": true,
     "rust-analyzer-lsp@claude-plugins-official": true,
@@ -66,12 +61,6 @@
       "source": {
         "source": "github",
         "repo": "JuliusBrussee/caveman"
-      }
-    },
-    "claudemon": {
-      "source": {
-        "source": "github",
-        "repo": "zamarrowski/claudemon"
       }
     },
     "localstack-dev": {
