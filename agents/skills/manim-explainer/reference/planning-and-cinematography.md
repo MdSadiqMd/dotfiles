@@ -89,6 +89,8 @@ Rules:
 - **Motion** is a verb (transform, grow, flash, dim, push in, drive to 0). If a beat has no motion verb,
   it is a slide: redesign it as a demo.
 - If a beat answers no question, cut it or add the question to the previous beat.
+- **Fullest frame:** under the table, list what is on screen together at each beat's busiest moment. If it can't be
+  drawn without overlap on paper, split the beat; don't find out cue by cue.
 - **Left on screen** sets up the next beat's continuity and prevents clutter build-up.
 
 ## 5. Cinematography in Manim

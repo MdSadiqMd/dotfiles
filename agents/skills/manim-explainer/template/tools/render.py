@@ -3,6 +3,7 @@
   python3 tools/render.py ch00 ch01        # 480p15 preview + contact sheet + beat sheet + lint, per chapter
   python3 tools/render.py all              # every chapter (or an episode key, e.g. ep1); unchanged ones are skipped
   python3 tools/render.py all -q h         # final quality (1080p60); -q p = 1080p30
+  python3 tools/render.py all --lint       # layout lint only: plays every chapter to its end states, draws no frames
   python3 tools/render.py ch03 --force     # re-render even if nothing changed
   python3 tools/render.py ch03 --sheet 20  # denser contact sheet
 
@@ -11,6 +12,9 @@ from a single decode. Compiled LaTeX is shared by every chapter and project (tex
 when its scene file, the shared scenes (common, kits, stage), the chapter files it imports,
 its beats' audio, durations and cues, assets/ and the Manim toolchain are all unchanged since its last render at
 that quality.
+
+A final render (-q p/h/k) lints every chapter first and refuses to start while any has a warning: fix it, or state why
+the overlap is the point with allow(shape, label, why) in the scene.
 """
 import argparse
 import concurrent.futures as cf
@@ -30,6 +34,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from env import tool_path, versions  # noqa: E402
 from narration import CHAPTERS, EPISODES, ORDER  # noqa: E402
 
+FINAL = ("p", "h", "k")
 QDIR = {"l": "480p15", "m": "720p30", "p": "1080p30", "h": "1080p60", "k": "2160p60"}
 CHAPTER = re.compile(r"ch\d+|e\d+c\d+", re.I)
 
@@ -113,7 +118,7 @@ def render(key, q):
     """Returns (key, rendered: bool, error text or None)."""
     sig = fingerprint(key, q)
     st = stamp(key, q)
-    if output(key, q).exists() and st.exists() and st.read_text() == sig:
+    if (q == "lint" or output(key, q).exists()) and st.exists() and st.read_text() == sig:
         return key, False, None
     for f in lint_files(key):  # common.lint appends; start each render clean
         f.unlink(missing_ok=True)
@@ -126,7 +131,7 @@ def render(key, q):
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text(f"[CLI]\ntex_dir = {cache / 'Tex'}\ntext_dir = {cache / 'texts'}\n")
     # "p" = 1080p at 30 fps: final quality at half the render time of 1080p60.
-    qflags = ["-qh", "--frame_rate", "30"] if q == "p" else [f"-q{q}"]
+    qflags = {"p": ["-qh", "--frame_rate", "30"], "lint": ["-ql", "--dry_run"]}.get(q, [f"-q{q}"])
     cmd = ["manim", "render", *qflags, "--disable_caching", "--config_file", str(cfg),
            "--media_dir", str(ROOT / "media"), str(scene_file(key)), key.capitalize()]
     res = subprocess.run(cmd, cwd=ROOT, env=dict(os.environ, PATH=tool_path()), capture_output=True, text=True)
@@ -139,21 +144,25 @@ def render(key, q):
     return key, True, None
 
 
+def lint_lines(key):
+    return [(f.stem, *line.split("  ", 1)) for f in lint_files(key) if f.exists() for line in f.read_text().splitlines()]
+
+
+def lint_bad(key):
+    return any(when != "-" for _, when, _ in lint_lines(key))
+
+
 def lint_report(key):
-    found = [line for f in lint_files(key) if f.exists() for line in f.read_text().splitlines()]
-    if not found:
-        return []
-    # one line per distinct issue with where it first and last showed, so a persistent stage problem
-    # doesn't print once per cue and bury the new ones
-    seen = {}
-    for line in found:
-        where, msg = line.split("  ", 1)
-        seen.setdefault(msg, []).append(where)
-    out = [f"{key}: {len(seen)} distinct layout warnings (review/lint/); fix them or confirm they are intended:"]
-    for msg, ws in seen.items():
-        span = ws[0] if len(ws) == 1 else f"{ws[0]} .. {ws[-1]}, {len(ws)}x"
-        out.append(f"  {msg}  [{span}]")
-    return out
+    """One line per distinct problem with where it first shows, so a persistent stage problem doesn't print once per
+    beat and bury the new ones; then the overlaps the scene allows, with their reasons."""
+    seen, allowed = {}, {}
+    for beat, when, msg in lint_lines(key):
+        (allowed if when == "-" else seen).setdefault(re.sub(r"\(-?[\d.]+,-?[\d.]+\)", "", msg), []).append((beat, when, msg))
+    out = [f"{key}: {len(seen)} layout warnings: fix each one, or allow() it with a reason:"] if seen else []
+    for at in seen.values():
+        beat, when, msg = at[0]
+        out.append(f"  {beat} {when}  {msg}" + (f"  (and {len(at) - 1} later beats)" if len(at) > 1 else ""))
+    return out + [f"  {beat} {msg}" for at in allowed.values() for beat, _, msg in at[:1]]
 
 
 def review(key, q, n):
@@ -170,6 +179,8 @@ def review(key, q, n):
 def job(key, q, n):
     """Render one chapter and build its review in the same worker, so sheets don't queue behind each other."""
     key, rendered, err = render(key, q)
+    if q == "lint":
+        return key, True, err, lint_report(key)
     return key, rendered, err, (review(key, q, n) if rendered and not err else [])
 
 
@@ -178,6 +189,7 @@ def main():
     ap.add_argument("keys", nargs="+")
     ap.add_argument("-q", default="l", choices=QDIR)
     ap.add_argument("--sheet", type=int, default=16)
+    ap.add_argument("--lint", action="store_true", help="layout lint only, no frames")
     ap.add_argument("--force", action="store_true", help="render even when nothing changed")
     ap.add_argument("-j", type=int, default=int(os.environ.get("RENDER_JOBS", 0)) or min(8, (os.cpu_count() or 2) // 2),
                     help="chapters rendered at once (default: half the cores, at most 8)")
@@ -186,25 +198,35 @@ def main():
     if args.force:
         for k in keys:
             stamp(k, args.q).unlink(missing_ok=True)
-    failed, skipped = [], []
-    # Each chapter is its own manim process (single-threaded Cairo), so chapters render side by side.
-    with cf.ThreadPoolExecutor(max(1, args.j)) as pool:
-        # longest chapters first, so a long one doesn't start last and set the finishing time
-        durs = json.loads((ROOT / "durations.json").read_text())
-        order = sorted(keys, key=lambda k: -sum(durs.get(b, 0) for b, _ in CHAPTERS[k]))
-        for done in cf.as_completed([pool.submit(job, k, args.q, args.sheet) for k in order]):
-            key, rendered, err, lines = done.result()
-            if err:
-                failed.append(key)
-                print(f"{key}: RENDER FAILED\n{err}\n", flush=True)
-            elif not rendered:
-                skipped.append(key)
-            else:
-                print("\n".join(lines), flush=True)
-    if skipped:
-        print(f"unchanged, not re-rendered: {' '.join(sorted(skipped))} (--force to redo)")
-    if failed:
-        raise SystemExit(f"render failed: {' '.join(sorted(failed))}")
+    # longest chapters first, so a long one doesn't start last and set the finishing time
+    durs = json.loads((ROOT / "durations.json").read_text())
+    keys.sort(key=lambda k: -sum(durs.get(b, 0) for b, _ in CHAPTERS[k]))
+
+    def run(q):
+        failed, skipped = [], []
+        # Each chapter is its own manim process (single-threaded Cairo), so chapters render side by side.
+        with cf.ThreadPoolExecutor(max(1, args.j)) as pool:
+            for done in cf.as_completed([pool.submit(job, k, q, args.sheet) for k in keys]):
+                key, rendered, err, lines = done.result()
+                if err:
+                    failed.append(key)
+                    print(f"{key}: {'LINT' if q == 'lint' else 'RENDER'} FAILED\n{err}\n", flush=True)
+                elif not rendered:
+                    skipped.append(key)
+                elif lines:
+                    print("\n".join(lines), flush=True)
+        if skipped:
+            print(f"unchanged, not re-rendered: {' '.join(sorted(skipped))} (--force to redo)")
+        if failed:
+            raise SystemExit(f"failed: {' '.join(sorted(failed))}")
+
+    if args.lint or args.q in FINAL:
+        run("lint")
+        if bad := sorted(k for k in keys if lint_bad(k)):
+            raise SystemExit(f"layout lint not clean: {' '.join(bad)}" + ("" if args.lint else " (final render not started)"))
+        print(f"layout lint clean: {len(keys)} chapters")
+    if not args.lint:
+        run(args.q)
 
 
 if __name__ == "__main__":

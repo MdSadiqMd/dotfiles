@@ -19,6 +19,12 @@
 - `ImageMobject` can't go in a `VGroup`; use `Group`.
 - `always_redraw` objects have no stable identity: clear updaters before transforming them.
 
+- Draw order is the order things were first animated in, not their order in the group. An opaque box faded in after
+  one of its rows would hide it, so `card`/`panel`/`label_box` raise their contents by `z_index` 0.5. Do the same for
+  contents you add to a `panel` before showing it.
+- `set_color` on a group recolours the text inside it too: numbers end up in their own cell's colour. Rebuild instead.
+- A submobject widens its parent's bounding box: cells holding wider numbers then `arrange` with uneven gaps.
+
 ## Paths and motion
 - `MoveAlongPath` on a path with two identical consecutive points raises "Not sure how you reached here".
   Drop duplicate points when building a route.

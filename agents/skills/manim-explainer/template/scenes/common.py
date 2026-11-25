@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from lint import Watch, allow, bounds, hits, outline  # noqa: F401
 from manim import *
 from PIL import Image as _PILImage
 
@@ -62,7 +63,8 @@ class Beat:
         # rendering in parallel never race on a shared file
         log = ROOT / "review" / "beat_times"
         log.mkdir(parents=True, exist_ok=True)
-        (log / f"{self.key}.txt").write_text(f"{self.start:.3f}")
+        if not config.dry_run:  # a lint-only run plays no frames, so its times aren't the video's
+            (log / f"{self.key}.txt").write_text(f"{self.start:.3f}")
         return self
 
     def t(self, frac):
@@ -71,7 +73,6 @@ class Beat:
 
     def cue(self, i):
         """Hold until narration segment i (split by | in narration.py) starts, so the next animation lands on it."""
-        lint(self.scene, f"{self.key}[{max(0, i - 1)}->]")
         target = self.start + CUES[self.key][i]
         rem = target - self.scene.time
         if rem > 0.03:
@@ -88,15 +89,26 @@ class Beat:
 
     def __exit__(self, kind, *_):
         if kind is None:
-            lint(self.scene, f"{self.key}[end]")
             rem = self.left()
             if rem > 0.03:
                 self.scene.wait(rem)
             if self.gap > 0:
                 self.scene.wait(self.gap)
+            self.scene.watch.flush(ROOT / "review" / "lint" / f"{self.key}.txt")
 
 
 class VoiceMixin:
+    def setup(self):
+        super().setup()
+        self.watch = Watch()
+        if config.dry_run:  # render.py --lint: jump to the end of every animation and draw nothing
+            self.next_section(skip_animations=True)
+            self.camera.capture_mobjects = lambda *args, **kwargs: None
+
+    def play(self, *args, **kwargs):
+        super().play(*args, **kwargs)
+        self.watch.step(self, self.duration)
+
     def beat(self, key, gap=0.35):
         return Beat(self, key, gap)
 
@@ -176,19 +188,17 @@ def cell_grid(values, cell=0.42, vmax=None, buff=0.04):
     return grid
 
 
-def vector_cells(values, color, cell=0.42, direction=DOWN, buff=0.04, decimals=None):
-    """A labelled vector as a strip of cells in one color, optional decimals inside."""
-    cells = VGroup()
-    for v in values:
-        sq = Square(cell, stroke_width=1.5, stroke_color=color,
-                    fill_color=color, fill_opacity=0.12 + 0.55 * min(1, abs(v)))
-        cells.add(sq)
-    cells.arrange(direction, buff=buff)
-    if decimals is not None:
-        for sq, v in zip(cells, values):
-            d = DecimalNumber(v, num_decimal_places=decimals, font_size=22, color=WHITE)
-            d.move_to(sq)
-            sq.add(d)
+def vector_cells(values, color, cell=0.42, direction=DOWN, buff=0.04, decimals=None, size=22, text_color=WHITE):
+    """A vector as a strip of equal cells in one color. With `decimals`, every cell grows to hold the widest number
+    ("-0.53" is wider than "0.12"), so none spills over its border. To recolour a strip, build it again in the new
+    colour: set_color() would also paint the numbers the colour of their cells."""
+    nums = [] if decimals is None else [DecimalNumber(v, num_decimal_places=decimals, font_size=size, color=text_color)
+                                        for v in values]
+    w = max([cell] + [n.width + 0.2 for n in nums])
+    cells = VGroup(*[Rectangle(width=w, height=cell, stroke_width=1.5, stroke_color=color, fill_color=color,
+                               fill_opacity=0.12 + 0.38 * min(1, abs(v))) for v in values]).arrange(direction, buff=buff)
+    for sq, n in zip(cells, nums):
+        sq.add(n.move_to(sq))
     return cells
 
 
@@ -218,15 +228,28 @@ def code_col(lines, size=20, color=GREY_A, buff=0.1):
     return rows
 
 
+def tint(color, amount):
+    """The opaque colour that `color` at opacity `amount` makes on the black background. Boxes are filled with this
+    instead of a transparent fill, so a dimmed stage or a line behind a box never shows through its text."""
+    return interpolate_color(ManimColor(BG), ManimColor(color), amount)
+
+
+def _lift(mob):
+    """Draw a box's contents above its opaque fill even when a scene animates the contents in before the box."""
+    for m in mob.get_family():
+        m.set_z_index(m.z_index + 0.5, family=False)
+    return mob
+
+
 def label_box(text, w=2.4, h=0.8, color=POS, size=28, fill=0.12, text_color=WHITE, mono=False):
     """A rounded box with a label shrunk to fit; .box and .label for animating parts."""
     box = RoundedRectangle(corner_radius=0.12, width=w, height=h, stroke_color=color, stroke_width=3,
-                           fill_color=color, fill_opacity=fill)
+                           fill_color=tint(color, fill), fill_opacity=1)
     lab = code(text, size, text_color) if mono else T(text, size, text_color)
     if lab.width > w - 0.2:
         lab.scale_to_fit_width(w - 0.2)
     lab.move_to(box)
-    g = VGroup(box, lab)
+    g = VGroup(box, _lift(lab))
     g.box, g.label = box, lab
     return g
 
@@ -344,8 +367,8 @@ def card(content, title=None, pad=0.32, gap=0.26, center=ORIGIN, min_width=0):
         body = VGroup(t, content).arrange(DOWN, buff=gap, aligned_edge=LEFT)
     box = RoundedRectangle(corner_radius=0.22, width=max(min_width, body.width + 2 * pad),
                            height=body.height + 2 * pad, stroke_color=GREY_D, stroke_width=2.5,
-                           fill_color=GREY_E, fill_opacity=0.35).move_to(body)
-    g = VGroup(box, body).move_to(center)
+                           fill_color=tint(GREY_E, 0.35), fill_opacity=1).move_to(body)
+    g = VGroup(box, _lift(body)).move_to(center)
     g.box, g.content, g.title = box, content, (body[0] if title else None)
     return g
 
@@ -355,12 +378,12 @@ def panel(w, h, title=None, center=ORIGIN):
     an area that is filled and emptied over time (a side computation). For anything whose contents are known when
     it appears (a rule, a table, a log, measurements) use card(), which is sized from its contents."""
     box = RoundedRectangle(corner_radius=0.22, width=w, height=h, stroke_color=GREY_D, stroke_width=2.5,
-                           fill_color=GREY_E, fill_opacity=0.35).move_to(center)
+                           fill_color=tint(GREY_E, 0.35), fill_opacity=1).move_to(center)
     g = VGroup(box)
     g.box = box
     if title:
         t = T(title, 24, GREY_B).move_to(box.get_corner(UL) + np.array([0.2, -0.22, 0]), aligned_edge=UL)
-        g.add(t)
+        g.add(_lift(t))
         g.title = t
     return g
 
@@ -385,202 +408,64 @@ def box_row(items, y, x=0.0, buff=0.3):
     return g
 
 
-# ------------------------------------------------------------------ layout lint
-def _types(*names):
-    """The Manim classes among `names` that this Manim version has (a renamed class just drops out)."""
-    import manim
-    return tuple(c for c in (getattr(manim, n, None) for n in names) if isinstance(c, type))
+def connect(a, b, color=SOFT, width=3, buff=0.08, arrow=False, cls=None):
+    """A line or arrow between two mobjects that starts and ends at their edges, whatever the angle, and follows them
+    when they move. Never place a connector by interpolating between centres: it stops short of a wide box, runs into
+    a narrow one, and stays behind when either moves. `cls=DashedLine` for a dashed one."""
+    cls = cls or (Arrow if arrow else Line)
+
+    def edge(m, toward):
+        c, d = m.get_center(), toward - m.get_center()
+        half = np.array([m.width / 2, m.height / 2])
+        reach = np.min(half / np.maximum(np.abs(d[:2]), 1e-9))
+        return c + d * min(1.0, reach)
+
+    def make():
+        p, q = edge(a, b.get_center()), edge(b, a.get_center())
+        step = normalize(q - p) * buff
+        return cls(p + step, q - step, color=color, stroke_width=width, **({"buff": 0} if cls in (Line, Arrow) else {}))
+
+    line = make()
+    seen = [a.get_center(), b.get_center()]
+
+    def follow(m):
+        now = [a.get_center(), b.get_center()]
+        if not np.allclose(now, seen):
+            m.become(make())
+            seen[:] = now
+    return line.add_updater(follow)
 
 
-_TEXT_TYPES = None
+def place_label(label, target, avoid=(), sides=(UP, DOWN, RIGHT, LEFT), buff=0.15, align=True):
+    """Put `label` beside `target` at the first spot that is inside the safe area and clear of every mobject in
+    `avoid`: pass what is on screen there AND what arrives later while the label is up. Tries each side centred, then
+    flush with each end. Raises when nothing is free: then make room (shrink or shift the group, see backed())."""
+    solid = [m for a in avoid for m in a.get_family() if isinstance(m, VMobject) and len(m.points) >= 4]
+    segs = [(bounds(m.points[:, :2]), m) for m in solid]
+    home = label.get_center()
+    for side in sides:
+        edges = [None] + ([LEFT, RIGHT] if align and abs(side[1]) else [UP, DOWN] if align else [])
+        for flush in edges:
+            label.next_to(target, side, buff=buff)
+            if flush is not None:
+                label.align_to(target, flush)
+            (x, y), w, h = label.get_center()[:2], label.width / 2 + 0.06, label.height / 2 + 0.06
+            if abs(x) + w > 6.95 or abs(y) + h > 3.75:
+                continue
+            box = np.array([[x - w, y - h, x + w, y + h]])
+            near = [m for b, m in segs if b[0] < x + w and b[2] > x - w and b[1] < y + h and b[3] > y - h]
+            if not any(hits(outline(m), box) for m in near):
+                return label
+    label.move_to(home)
+    raise ValueError(f"no free spot for {getattr(label, 'tex_string', None) or type(label).__name__!r} beside its target: "
+                     "make room (arrange the whole frame first) or use backed()")
 
 
-def _text_units(mob, out):
-    global _TEXT_TYPES
-    if _TEXT_TYPES is None:
-        _TEXT_TYPES = _types("SingleStringMathTex", "Text", "MarkupText", "DecimalNumber", "Integer")
-    if isinstance(mob, _TEXT_TYPES):
-        out.append(mob)
-        return
-    for sm in mob.submobjects:
-        _text_units(sm, out)
-
-
-def _bounds(m):
-    """(x0, y0, x1, y1) from the points Manim itself uses for get_corner (anchors of every VMobject in the family)."""
-    pts = m.get_points_defining_boundary()
-    if len(pts) == 0:
-        return (0.0, 0.0, 0.0, 0.0)
-    lo, hi = pts.min(axis=0), pts.max(axis=0)
-    return (lo[0], lo[1], hi[0], hi[1])
-
-
-def _bbox(m):
-    x0, y0, x1, y1 = _bounds(m)
-    return (x0, y0), (x1, y1)
-
-
-def _visible(m):
-    fam = [f for f in m.get_family() if isinstance(f, VMobject) and len(f.points)]
-    if not fam:
-        return False
-    return max(max(f.get_fill_opacity(), f.get_stroke_opacity()) for f in fam) > 0.3
-
-
-def _label(m):
-    """'text' at (x,y): the position saves working out which of several copies the warning means."""
-    x, y = m.get_center()[:2]
-    return f"'{(getattr(m, 'tex_string', None) or getattr(m, 'text', None) or type(m).__name__)[:28]}' at ({x:.2f},{y:.2f})"
-
-
-class _Leaf:
-    """One drawn VMobject, measured once per lint pass."""
-    __slots__ = ("m", "box", "visible", "fill", "_wh")
-
-    def __init__(self, m):
-        self.m = m
-        self.box = _bounds(m)
-        self.fill = m.get_fill_opacity()
-        self.visible = max(self.fill, m.get_stroke_opacity()) > 0.3
-        self._wh = None
-
-    @property
-    def wh(self):  # Manim's width/height count curve handles too, unlike the boundary; ask Manim, once
-        if self._wh is None:
-            self._wh = (self.m.width, self.m.height)
-        return self._wh
-
-
-def _pairs(a, b):
-    """Overlap area and the inputs of every test below, for all pairs of boxes a[i], b[j] at once.
-    Same float operations, in the same order, as the scalar formulas they replace, so results are identical."""
-    ax0, ay0, ax1, ay1 = (a[:, k][:, None] for k in range(4))
-    bx0, by0, bx1, by1 = (b[:, k][None, :] for k in range(4))
-    w = np.minimum(ax1, bx1) - np.maximum(ax0, bx0)
-    h = np.minimum(ay1, by1) - np.maximum(ay0, by0)
-    return np.maximum(0, w) * np.maximum(0, h), (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1), w
-
-
-def _inside(a, b, tol):
-    """a inside b (+tol), for broadcast box coordinates."""
-    (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1) = a, b
-    return (ax0 >= bx0 - tol) & (ay0 >= by0 - tol) & (ax1 <= bx1 + tol) & (ay1 <= by1 + tol)
-
-
-def lint(scene, where):
-    """Write layout problems at a rest point (a cue or the end of a beat) to review/lint/<beat>.txt:
-    anything outside the frame, two labels overlapping or touching, a label half-covered by a filled shape, a
-    filled shape poking half out of another one, and for every box that holds a label: a label crossing its edge,
-    a label with < 0.1 padding inside it, and anything outside it closer than 0.1.
-
-    Every mobject is measured once and the pair tests run as numpy matrices (a 600-cell grid is 360k shape pairs
-    per rest point); issues come out in the same order as the nested loops they replace."""
-    frame = getattr(scene.camera, "frame", None)
-    tops = [m for m in scene.mobjects if m is not frame]
-    fams = [t.get_family() for t in tops]
-    texts = []
-    for t in tops:
-        _text_units(t, texts)
-    text_ids = {id(f) for t in texts for f in t.get_family()}
-    texts = [t for t in texts if _visible(t)]
-    leaves = {}  # id -> _Leaf, for every VMobject leaf with points
-    for fam in fams:
-        for f in fam:
-            if id(f) not in leaves and isinstance(f, VMobject) and not f.submobjects and len(f.points):
-                leaves[id(f)] = _Leaf(f)
-    issues = []
-    for fam in fams:
-        for f in fam:
-            lf = leaves.get(id(f))
-            if lf is not None and lf.visible:
-                x0, y0, x1, y1 = lf.box
-                if x0 < -7.05 or x1 > 7.05 or y0 < -3.97 or y1 > 3.97:
-                    issues.append(f"out of frame: {type(f).__name__} at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
-                    break
-    shapes = [lf for fam in fams for f in fam
-              if (lf := leaves.get(id(f))) is not None and id(f) not in text_ids and lf.fill >= 0.15
-              and lf.wh[0] > 0.15 and lf.wh[1] > 0.15]
-    T = np.array([_bounds(t) for t in texts], dtype=float).reshape(-1, 4)
-    S = np.array([lf.box for lf in shapes], dtype=float).reshape(-1, 4)
-    t_area = (T[:, 2] - T[:, 0]) * (T[:, 3] - T[:, 1])
-    s_area = (S[:, 2] - S[:, 0]) * (S[:, 3] - S[:, 1])
-    upper = np.triu(np.ones((len(T), len(T)), dtype=bool), 1)
-
-    ov_tt, ta, tb, _ = _pairs(T, T)
-    min_area = np.minimum(t_area[:, None], t_area[None, :])
-    for i, j in np.argwhere(upper & (ov_tt > 0.12 * min_area) & (ov_tt > 0.004)):
-        issues.append(f"labels overlap: {_label(texts[i])} / {_label(texts[j])}")
-
-    ov_ts, ta_s, sb_s, _ = _pairs(T, S)
-    hit = (ov_ts > 0.08 * t_area[:, None]) & (ov_ts > 0.004) & ~_inside(ta_s, sb_s, 0.03)
-    for i, j in np.argwhere(hit):
-        x0, y0, x1, y1 = S[j]
-        issues.append(f"label half-covered: {_label(texts[i])} by {type(shapes[j].m).__name__} "
-                      f"at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
-
-    ov_ss, sa, sb, _ = _pairs(S, S)
-    row_ok = np.array([s_area[i] >= 0.04 and not isinstance(lf.m, Triangle) and not getattr(lf.m, "lint_skip", False)
-                       for i, lf in enumerate(shapes)], dtype=bool)
-    hit = (row_ok[:, None] & (s_area[:, None] < s_area[None, :]) & (ov_ss > 0.15 * s_area[:, None])
-           & ~_inside(sa, sb, 0.04))
-    np.fill_diagonal(hit, False)
-    for i, j in np.argwhere(hit):
-        x0, y0, x1, y1 = S[i]
-        issues.append(f"shape pokes out: {type(shapes[i].m).__name__} over {type(shapes[j].m).__name__} "
-                      f"at ({(x0 + x1) / 2:.2f},{(y0 + y1) / 2:.2f})")
-
-    # Stacked labels that touch: horizontally overlapping and less than 0.06 apart vertically (a panel title sitting
-    # on its first row). The area test above misses these because the overlap is a thin sliver.
-    (ax0, ay0, ax1, ay1), (bx0, by0, bx1, by1) = ta, tb
-    ho = np.minimum(ax1, bx1) - np.maximum(ax0, bx0)
-    vg = np.maximum(by0 - ay1, ay0 - by1)
-    t_w = T[:, 2] - T[:, 0]
-    hit = upper & (ho > 0.3 * np.minimum(t_w[:, None], t_w[None, :])) & (vg < 0.06) & (ov_tt <= 0.12 * min_area)
-    for i, j in np.argwhere(hit):
-        issues.append(f"labels touch: {_label(texts[i])} / {_label(texts[j])}")
-
-    # Containers: any visible rectangle that holds a label, whatever its fill (a 0.12-fill panel was invisible to
-    # every check above, so labels straddling its border passed). A label must sit inside with >= 0.1 padding,
-    # and nothing outside may come within 0.1 of the box (a panel butting into the stage below it).
-    rects = [lf for fam in fams for f in fam
-             if (lf := leaves.get(id(f))) is not None and isinstance(f, Rectangle) and lf.visible
-             and lf.wh[0] > 0.6 and lf.wh[1] > 0.4 and not getattr(f, "lint_skip", False)]
-    if rects and len(T):
-        R = np.array([lf.box for lf in rects], dtype=float)
-        holds = _inside(*_pairs(T, R)[1:3], 0).any(axis=0)
-        boxes = [(lf, R[k]) for k, lf in enumerate(rects) if holds[k]]
-    else:
-        boxes = []
-    near = [lf for fam in fams for f in fam
-            if (lf := leaves.get(id(f))) is not None and lf.visible and id(f) not in text_ids
-            and (lf.box[2] - lf.box[0]) * (lf.box[3] - lf.box[1]) >= 0.03]
-    L = np.array([lf.box for lf in near], dtype=float).reshape(-1, 4)
-    for box, cb in boxes:
-        bx0, by0, bx1, by1 = cb
-        name = f"box at ({(bx0 + bx1) / 2:.2f},{(by0 + by1) / 2:.2f})"
-        x0, y0, x1, y1 = T[:, 0], T[:, 1], T[:, 2], T[:, 3]
-        ins = (x0 >= bx0) & (y0 >= by0) & (x1 <= bx1) & (y1 <= by1)
-        pad = np.minimum(np.minimum(x0 - bx0, y0 - by0), np.minimum(bx1 - x1, by1 - y1))
-        ov = np.maximum(0, np.minimum(x1, bx1) - np.maximum(x0, bx0)) * np.maximum(0, np.minimum(y1, by1) - np.maximum(y0, by0))
-        gap = np.maximum(np.maximum(bx0 - x1, x0 - bx1), np.maximum(by0 - y1, y0 - by1))
-        for i in range(len(T)):
-            if ins[i]:
-                if pad[i] < 0.1:
-                    issues.append(f"label cramped in {name}: {_label(texts[i])} (pad {pad[i]:.2f})")
-            elif ov[i] > 0:
-                issues.append(f"label crosses edge of {name}: {_label(texts[i])}")
-            elif gap[i] < 0.1:
-                issues.append(f"label crowds {name}: {_label(texts[i])}")
-        x0, y0, x1, y1 = L[:, 0], L[:, 1], L[:, 2], L[:, 3]
-        skip = (((x0 >= bx0) & (y0 >= by0) & (x1 <= bx1) & (y1 <= by1))
-                | ((bx0 >= x0) & (by0 >= y0) & (bx1 <= x1) & (by1 <= y1)))
-        gap = np.maximum(np.maximum(bx0 - x1, x0 - bx1), np.maximum(by0 - y1, y0 - by1))
-        for k in np.flatnonzero(~skip & (gap < 0.1)):
-            if near[k] is not box:
-                issues.append(f"{type(near[k].m).__name__} crowds {name}")
-    if issues:
-        out = ROOT / "review" / "lint"
-        out.mkdir(parents=True, exist_ok=True)
-        with open(out / f"{where.split('[')[0]}.txt", "a") as fh:
-            for line in dict.fromkeys(issues):
-                fh.write(f"{where}  {line}\n")
+def backed(label, pad=0.12):
+    """The label on an opaque plate in the background colour, for a label that must sit over a busy field (a grid, a
+    curve, a map). First choice is still to make room; the plate keeps the field at full brightness either way."""
+    plate = Rectangle(width=label.width + 2 * pad, height=label.height + 2 * pad, stroke_width=0, fill_color=BG,
+                      fill_opacity=1).move_to(label)
+    g = VGroup(plate, label)
+    g.label = label
+    return g

@@ -280,6 +280,8 @@ class Avatar(VGroup):
     def look(self, target):
         """Animation: pupils shift toward a point (or back to centre when target is None)."""
         moves = []
+        if isinstance(target, Mobject):
+            target = target.get_center()
         for e, pu in zip(self.eyes, self.pupils):
             if target is None:
                 to = e.get_center()

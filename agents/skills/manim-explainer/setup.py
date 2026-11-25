@@ -5,6 +5,7 @@
   python3 setup.py --upgrade    move to the newest versions that pass the self-test (a daily job runs this)
   python3 setup.py --check      self-test the installed toolchain
   python3 setup.py --upgrade --accept-look   take an upgrade whose frames moved more than the guard allows
+  python3 setup.py --check --accept-look     after changing the template's look: make its frames the new reference
 
 Nothing is pinned. For each stack (render: manim; voice: kokoro + whisper) it picks the newest stable CPython for
 which the compiled dependencies have wheels, installs the newest releases into a staged relocatable venv, and runs
@@ -186,6 +187,9 @@ def selftest(home, online, accept_look=False):
     for args in (["tools/render.py", "all"], ["tools/assemble.py", "-q", "l"], ["tools/freeze_report.py"]):
         if err := step("render", *args):
             return err
+    r = run([home / "render/bin/python", SKILL / "selftest/test_lint.py", work])
+    if r.returncode:
+        return "render", f"layout lint cases: {(r.stdout + r.stderr).strip()[-2000:]}"
     frames = work / "review/frames"
     ref = DATA / "reference"
     if ref.exists() and not accept_look:
@@ -242,7 +246,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--upgrade", action="store_true", help="move to the newest versions that pass the self-test")
     ap.add_argument("--check", action="store_true", help="self-test the installed toolchain")
-    ap.add_argument("--accept-look", action="store_true", help="skip the frame comparison for this upgrade")
+    ap.add_argument("--accept-look", action="store_true", help="accept the new frames as the reference")
     args = ap.parse_args()
     current = json.loads((DATA / "versions.json").read_text()) if (DATA / "versions.json").exists() else {}
     missing = [s for s in STACKS if not (DATA / s / "bin/python").exists() or s not in current]
@@ -253,7 +257,10 @@ def main():
     held = lock()  # noqa: F841 (kept open: the lock lasts until exit)
     t0 = time.time()
     if args.check:
-        failed, msg = selftest(DATA, online=False)
+        failed, msg = selftest(DATA, online=False, accept_look=args.accept_look)
+        if failed is None and args.accept_look:
+            shutil.rmtree(DATA / "reference", ignore_errors=True)
+            shutil.copytree(DATA / ".selftest/review/frames", DATA / "reference")
         log(msg if failed is None else f"FAILED ({failed}): {msg} (work dir kept: {DATA / '.selftest'})")
         if failed is None:
             shutil.rmtree(DATA / ".selftest", ignore_errors=True)

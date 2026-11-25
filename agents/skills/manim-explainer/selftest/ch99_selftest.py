@@ -23,6 +23,7 @@ class Ch99(VoiceScene):
         with self.beat("c99_1") as b:
             self.play(FadeIn(ann), FadeIn(box), run_time=0.6)
             self.play(FadeIn(rule), Write(lines), run_time=b.span(0, 1, 0.6))
+            self.add(connect(rule, lines, arrow=True), place_label(T("note", 22), eq, avoid=[eq, lines]))
             b.cue(1)
             self.play(box.opened(), ann.look(box.get_center()), FadeIn(eq, shift=UP * 0.2), run_time=0.8)
             self.camera.frame.save_state()

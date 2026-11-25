@@ -82,15 +82,35 @@ sum), so the viewer sees where every number comes from.
   title is fine for a work panel that appears and leaves ("Bob checks").
 - **Two runs are two rows, never stacked ghosts.** v4 shrank run-1 tokens into slot corners when run 2 arrived
   (overlapping ghosts). v6 gives each run its own table row and wraps the shared column with one outline.
-- **Run the layout lint.** `common.lint` runs at every cue and at the end of every beat (no extra code in
-  scenes) and writes `review/lint/<beat>.txt`; `render.py` prints each distinct warning once with the beats it
-  spans. It flags anything outside the frame, labels overlapping or touching (< 0.06 apart when stacked), a
-  label half-covered by a filled shape, a filled shape poking out of another, and for every box that holds a
-  label, whatever its fill: a label crossing its edge, a label with < 0.1 padding, and anything outside it
-  closer than 0.1. (Before this, a panel with fill under 0.15 was invisible to the lint, so all three flagged
-  Bluetooth-film frames passed.) It caught a forger never seated (it sat in the middle of the table), fine print colliding with the
-  table, and a seed die rendered as a solid square. Deliberate overlaps (area-model strips crossing, a
-  double-chevron icon) can stay: say so when you report. Mark a shape `lint_skip = True` to silence it.
+- **Lay out for the fullest moment.** Rejected frames (Thine series), all from placing each object when its cue came,
+  by hand-typed coordinates, against whatever was on screen *then*:
+  - a region label sat clear of its own dashed box, then a second, larger dashed box arrived and cut through it;
+  - a sentence was placed at the top of the frame, where a 300-box grid already reached: the gap never existed;
+  - a label went above a token that then moved beside a bar, so the bar covered its middle;
+  - a label was set at the top right of a panel where the curve's tallest peaks were.
+  Build all of it first, arrange it, reveal it in order. Two overlapping regions: labels on opposite sides, or flush
+  with the end that is not shared (`place_label` finds it).
+- **No room? Make room.** Shrink or shift the group a little, at full brightness, and give the label its own band.
+  Don't dim what the viewer is meant to see. `backed(label)` is the last resort.
+- **What is dimmed is still there.** A stage faded to 10–18% reads clearly behind a transparent panel or a thin label.
+  Dim what sits *beside* the new content; fade out (`FadeOut`, or `fade(0.96)`) what sits *behind* it. Hand-built
+  panels with a 0.35 fill let it through; `card`/`panel`/`label_box` don't.
+- **Connectors belong to what they connect.** `connect(a, b)`. A label about the link sits on the side of the box
+  away from the line.
+- **Run the layout lint** (`scenes/lint.py`; no code in scenes; `render.py … --lint` for lint alone). After every
+  `play` and `wait` it checks what is drawn and reports what stays ≥ 0.5 s:
+  - an **outline through a label**: any stroke or fill edge (line, curve, dashes, thin bar, cell border, tiny boxes,
+    dimmed stage, image edge) that passes through its glyphs, unless an opaque plate lies between them;
+  - labels overlapping, touching, hidden under an opaque shape, outside the frame, or under 3:1 contrast with their fill
+    (black text on a bright chip counts as a label too);
+  - a label with < 0.1 padding in its box (0.03 in a small cell), or < 0.1 from a box it is not in;
+  - the dimmed stage showing through a box; boxes butting into each other; a shape poking out of another;
+  - a straight connector that stops short of, or runs into, a box it aims at.
+  It replaced a lint that compared bounding boxes by area at each cue. That one was blind to all strokes (a dashed
+  border, a waveform), to anything covering < 8% of a long label (a 0.18-wide bar, 25 small boxes), to anything dimmed
+  under 0.3, to a cell that holds its number as a submobject, and to what arrived between cues; its noise (grid cells,
+  arrow tips "crowding" boxes) taught the agent to wave warnings through. It said nothing about five of the seven chapters
+  the user flagged, and the agent dismissed it on the other two.
 
 ## 4. Component recipes (scenes/kit_protocol.py)
 

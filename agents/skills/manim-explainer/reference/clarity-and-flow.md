@@ -20,8 +20,8 @@ Read the narration alone, with no visuals.
 ## Pass 2: frames (after each `render.py`)
 
 Three checks, in this order:
-1. **Layout lint.** `render.py` prints the chapter's lint warnings (from `review/lint/`). Fix each one or confirm
-   it is a deliberate overlap.
+1. **Layout lint.** `render.py chNN --lint` (no frames), then again with each render. Fix every warning; the few
+   overlaps that are the point get `allow(shape, label, why)` after you have seen that frame at full size.
 2. **Contact sheet** `review/chNN.png`: the frames alone, with no audio (the checklist below).
 3. **Beat sheet** (`render.py` builds it; `python3 tools/beat_review.py chNN` rebuilds it): one frame per narration
    segment next to its words (`review/beats_chNN.png` + `.md`; after a fix, only the changed frames in
@@ -35,6 +35,8 @@ Three checks, in this order:
 - [ ] Labels sit next to their objects. No sentence-length text on screen.
 - [ ] Colors and places match the semantics in the storyboard.
 - [ ] Each beat shows motion (transform, grow, dim, push in). No static slides.
+- [ ] At each beat's *last* frame (its fullest): nothing that arrived late touches anything placed early.
+- [ ] Every connector meets both its boxes, also after something moved. Nothing dimmed shows behind text or a panel.
 - [ ] Every token fits its slot or box with padding; nothing pokes out, overflows a card, or covers a label.
 - [ ] Every card at 1080p, at its fullest: title clear of the first row, equal row gaps, columns aligned, one
       baseline per line, ≤ 2 type sizes, and clear air between the card and the stage around it.
@@ -69,4 +71,4 @@ The common causes of "confusing", and their fixes:
 | looks right but feels flat | the beats are joined by "and then"; reorder into but/therefore |
 | good start, falls apart after 3–4 min | each chapter starts on a fresh screen with new icons; keep one stage and swap the players (story-and-continuity §3) |
 | "animations are basic" | motions don't carry the argument; give every motion a sentence (animation-craft §2) |
-| "things don't fit / overlap / cut off" | size containers from contents, align on bodies, run the lint (animation-craft §3) |
+| "things don't fit / overlap / cut off" | lay out the fullest frame, size containers from contents, `place_label` / `connect`, run the lint (animation-craft §3) |

@@ -17,6 +17,11 @@ from the start:
 | Rejection | Prevented by |
 |---|---|
 | "text overlapping", "objects not fitted", "cut off at the top" | containers sized from contents, `box_row`, safe area, **layout lint** (step 7) |
+| a line, curve, dashed border or bar through a label; a label ruined by something that arrives later | lay out the fullest frame first, `place_label(avoid=…)`; the lint checks outlines after every play |
+| numbers spilling out of their cells; text in its own cell's colour | `vector_cells` sizes cells from the numbers; lint checks fit and contrast |
+| the dimmed stage showing through a panel | `card` / `panel` / `label_box` are opaque; lint flags ghosts behind labels |
+| connectors that stop short of a box, run into it, or stay behind when it moves | `connect(a, b)`; lint checks both ends |
+| a warning waved through as "deliberate" that the viewer then reported | a final render refuses to start until the lint is clean; exceptions are `allow(shape, label, why)` |
 | "messy", "congested", "no clear spacing" (a title on its first row, labels across a panel border, ragged rows, a panel jammed against the stage) | `card()` / `grid()` / `TC()` build content first and size the box around it; lint checks padding and clearance (animation-craft §3) |
 | "generic / basic animations" (4/10) | every motion says a sentence; physical props; what-if demos (animation-craft.md) |
 | "explanation 5/10", jargon, no thread | premise first, ≤ 3 ideas, one running picture and example (story-and-continuity.md) |
@@ -60,7 +65,7 @@ or numpy, use `~/.local/share/manim-explainer/render/bin/python`. If a tool misb
 
 Layout:
 - `research/` (facts tables), `docs/storyboard.md`, `narration.py` (+ `script/epN.py` for a series).
-- `scenes/chNN_name.py` (class `ChNN`); `scenes/common.py` (look, beats, lint, helpers); `scenes/kit_<domain>.py`
+- `scenes/chNN_name.py` (class `ChNN`); `scenes/common.py` (look, beats, helpers); `scenes/lint.py` (layout lint); `scenes/kit_<domain>.py`
   (recurring objects: `kit_nn.py` networks, `kit_protocol.py` parties/locks/table/dice/hash/fork);
   `scenes/stage.py` (your builders that recreate the stage state each chapter starts from).
 - `tools/`: `make_voice.py`, `qa_asr.py`, `render.py`, `beat_review.py`, `freeze_report.py`, `assemble.py`.
@@ -99,7 +104,8 @@ Copy this checklist into your reply and tick it off as you go:
    each act; plants and payoffs; a cut list.
 3. **Storyboard** (`docs/storyboard.md`): fix the stage geography and the concept → colour map, then one row per
    beat: question it answers, focal object, motion and the sentence it says, the cue phrase it lands on, what is
-   left on screen.
+   left on screen. For each beat also list its **fullest frame**: everything on screen at once at its busiest moment,
+   including what arrives at the last cue. That list is what the layout must fit, not the first cue's.
 4. **Narration as a teacher, not a reader** (`narration.py`):
    - Ask before answering: "So does Bob learn the slope? || He only sees one point."
    - Concrete case first ("five plus three times seven is twenty six"), then the name, then the rule.
@@ -119,14 +125,26 @@ Copy this checklist into your reply and tick it off as you go:
      items via `TC()` (one baseline). Never `move_to` hand-picked coordinates for rows inside a box.
    - Each chapter starts with a `stage.py` builder that recreates where the last chapter ended; the previous
      chapter ends by settling into that state. `fade_all()` only at act boundaries.
-   - The layout lint runs by itself at every cue and beat end. Alias concept colours at the top (`SECRET = P_GOLD`).
-7. **Render + review pass 2:** `python3 tools/render.py ch03 ch04` renders the chapters side by side at 480p
+   - **Lay out the fullest frame, then reveal it.** Build every object of the beat first, `arrange` them together
+     (the caption and the group it captions are one `VGroup(...).arrange(DOWN)`), and only then animate them in, cue by
+     cue. A label typed into a gap with `move_to([0, 3.35, 0])` is a guess about things that aren't there yet.
+   - A label beside anything another shape will share space with: `place_label(label, target, avoid=[...])`, with the
+     later arrivals in `avoid`. It raises when nothing is free: then make room (scale or shift the group; the group
+     keeps its brightness), and only if it must sit over a busy field, `backed(label)`.
+   - Every line or arrow between two objects: `connect(a, b)`. Never interpolate between centres.
+   - The layout lint runs by itself after every `play` and `wait`. Alias concept colours at the top (`SECRET = P_GOLD`).
+7. **Render + review pass 2:** first `python3 tools/render.py ch03 ch04 --lint` (or `all`, or `ep1`): it plays the
+   chapters to their end states without drawing frames, so it takes seconds (45 chapters of a 69-minute series: 39 s, unchanged ones skipped), and prints every
+   problem with its beat, time, how long it stays, and position. Fix until clean, then render.
+   `python3 tools/render.py ch03 ch04` renders the chapters side by side at 480p
    and, per chapter, prints its **lint warnings** (with positions) and writes the contact sheet `review/ch03.png`
    and the beat sheet `review/beats_ch03.png` + `.md` (one frame per narration segment beside its words). After
    a fix, the frames that changed are tiled into `review/beats_ch03_changed.png` (the output names them): review
    that, not the whole sheet again; unchanged frames are byte-identical to ones you already checked. Fix until
-   lint is clean (or every remaining warning is a deliberate overlap) and every beat frame shows what its
-   sentence says. For 1080p checks, `render.py ch03 -q p` then `python3 tools/beat_review.py ch03 --hd 05 12`
+   lint is clean and every beat frame shows what its sentence says. A warning is a fault until you have looked at that
+   second of video at full size; only then, if the overlap *is* the picture (a strike-through, a cursor on a word),
+   write `allow(shape, label, why)`. Never reword it as "deliberate" in a report: checked against the frames of
+   a finished series, nearly every warning was a visible fault, and the few harmless patterns are built into the lint. For 1080p checks, `render.py ch03 -q p` then `python3 tools/beat_review.py ch03 --hd 05 12`
    (beat-frame numbers from the `.md`), and look at **every card and stage panel at 1080p at its fullest
    moment**: 480p sheets hid all the spacing faults the user later flagged.
    `render.py` skips chapters whose inputs haven't changed, so `render.py all` is cheap; `--force` redoes one.
@@ -134,7 +152,7 @@ Copy this checklist into your reply and tick it off as you go:
 8. **Preview + pass 3:** `python3 tools/assemble.py [ep] -q l` (seconds: the preview skips loudness mastering, the
    final doesn't), then `python3 tools/freeze_report.py` and the beat sheets of all chapters read in order. Fix every frozen stretch with motion that shows its sentence.
 9. **Final:** `python3 tools/render.py all -q h && python3 tools/assemble.py -q h` (run it in the background) (1080p60; `-q p` = 1080p30 for
-   long films). Assembly does a two-pass loudnorm to −16 LUFS and **fails unless decoded audio length equals video
+   long films). It lints first and won't start while any chapter has a warning; don't work around it. Assembly does a two-pass loudnorm to −16 LUFS and **fails unless decoded audio length equals video
    length** (±0.15 s). Report the duration, LUFS and the sync line, and show full-resolution frames of the spots
    the user flagged and of the last chapter.
 
@@ -146,8 +164,8 @@ rendering was a small part. So:
   (`grep -n "def name" -A25 scenes/kit_protocol.py`). Read the reference files once, when the step says so.
 - Plan in the storyboard, then write each scene file directly. Don't draft scene code in your thinking and then
   write it again.
-- Place things with `arrange`, `next_to`, `card`, `grid`, `box_row`, not hand-computed coordinates. The lint
-  prints positions, so move what it names instead of nudging numbers and re-rendering.
+- Place things with `arrange`, `next_to`, `place_label`, `card`, `grid`, `box_row`, `connect`, not hand-computed
+  coordinates. The lint prints positions, so move what it names, and re-check with `--lint`, not a render.
 - Render the chapters you've written in one `render.py` call, read their sheets, and fix everything you found in
   one edit pass before rendering again.
 - Every image you read stays in context for the rest of the session: after a fix read `*_changed.png`, and a
@@ -164,8 +182,11 @@ rendering was a small part. So:
   `code_col(lines, size=20)` monospace.
 - Containers: `card(content, title=None, pad=0.32, gap=0.26, center)` sized from contents (`.box`, `.content`,
   `.title`); `grid(rows, col_align="lcr", h_buff, v_buff)`; `panel(w, h, title, center)` for areas filled over time;
-  `label_box(text, w, h, color)`; `box_row(items, y, x=0, buff=0.3)`; `roadmap(steps, current)`.
-- Data: `cell_grid(values)`, `vector_cells(values, color, decimals)`, `hbars(rows, vmax)` → (group, [(bar, text)]),
+  `label_box(text, w, h, color)`; `box_row(items, y, x=0, buff=0.3)`; `roadmap(steps, current)`. All are opaque
+  (`tint(color, amount)` is the fill), so what is behind them never shows through.
+- Layout: `place_label(label, target, avoid, sides=(UP, DOWN, RIGHT, LEFT), buff)`; `connect(a, b, color, arrow=False,
+  cls=None)` (edge to edge, follows moves); `backed(label)` (opaque plate); `allow(shape, label, why)` (lint exception).
+- Data: `cell_grid(values)`, `vector_cells(values, color, decimals, text_color)` (recolour by rebuilding), `hbars(rows, vmax)` → (group, [(bar, text)]),
   `still(name, height, width)` (ImageMobject), `countdown(scene, seconds)`.
 - Palette: `P_BLUE P_RED P_TEAL P_ORANGE P_PURPLE P_GREEN P_GOLD`, `FOCUS`, `POS`/`NEG`, `DIM`, `SOFT`.
 - `kit_protocol.py`: `Avatar(name, color, kind)` + `.look(target)`, `seat(avatar, side)`, `LockBox(content)` +
@@ -213,7 +234,9 @@ rendering was a small part. So:
 - **Text:** `Write` only short titles; escape LaTeX specials; `code_col` for code. `code()` is scaled so its size
   matches `T()` at the same number (raw Menlo `Text` is 1.7x bigger); in kit code, never call `Text(font="Menlo")`
   directly. At most two sizes inside one card (title + body).
-- **Gates:** no final render until lint, beat sheets and ASR QA are clean.
+- **Gates:** no final render until lint (enforced by `render.py`), beat sheets and ASR QA are clean. Read every
+  chapter's beat sheet: the worst frame of one series was in the one chapter whose sheet nobody opened.
+- **`lint_skip`** only silences shape-on-shape checks. Nothing about a label can be skipped, only `allow`ed.
 - **Length:** clarity beats brevity (accepted films ran 9–32 min); segment long ones (planning §3).
 
 Worked examples (if they still exist): `~/Developer/dust-video` (12 chapters, ML paper) and

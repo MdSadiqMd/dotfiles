@@ -1,7 +1,7 @@
 """List stretches where the preview frame sits frozen while the voice keeps talking, mapped to the sentence.
 
-  python3 tools/assemble.py -q l && python3 tools/freeze_report.py
-Reads review/full_preview.mp4, the 480p chapter renders and review/beat_times/. Prints stretches >= 4.5 s.
+  python3 tools/assemble.py -q l && python3 tools/freeze_report.py          # a series: both take ep1
+Reads review/full_preview.mp4 (or epN_preview.mp4), the 480p chapter renders and review/beat_times/. Prints stretches >= 4.5 s.
 Small motion (a counter, a probe dot) can read as frozen: check flagged lines with tools/beat_review.py.
 The fix is motion that shows what that sentence says, not decorative motion (camera drift was tried and cut).
 """
@@ -25,8 +25,15 @@ def probe(path):
 
 
 def main():
+    # series: `freeze_report.py ep2` scans review/ep2_preview.mp4 against that episode's chapters only
+    global ORDER
+    preview = ROOT / "review/full_preview.mp4"
+    if len(sys.argv) > 1:
+        from narration import EPISODES
+        ORDER = EPISODES[sys.argv[1]]
+        preview = ROOT / f"review/{sys.argv[1]}_preview.mp4"
     # the freeze scan decodes the whole preview; the chapter probes run alongside it
-    scan = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", str(ROOT / "review/full_preview.mp4"), "-vf",
+    scan = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", str(preview), "-vf",
                              "freezedetect=n=0.001:d=3", "-map", "0:v", "-f", "null", "-"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     with ThreadPoolExecutor(8) as pool:
