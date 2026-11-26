@@ -139,6 +139,22 @@ class Voice3DScene(VoiceMixin, ThreeDScene):
     pass
 
 
+EM = 0.01039  # one em per font_size point, in scene units (measured: the x of Computer Modern is 0.4306 em)
+
+
+def paced(scene, b, i, *groups, end=None, rt=0.8):
+    """Spread animations evenly over narration segment i, so the picture moves as long as the voice does (a 9 s sentence
+    whose four rows all landed in its first 2 s reads as frozen). A group is one animation or a list of them."""
+    cues = CUES[b.key]
+    t0 = max(b.start + cues[i], scene.time)
+    t1 = b.start + ((cues[i + 1] if i + 1 < len(cues) else b.dur) if end is None else end)
+    for k, g in enumerate(groups):
+        rem = t0 + (t1 - t0) * k / len(groups) - scene.time
+        if rem > 0.05:
+            scene.wait(rem)
+        scene.play(*(g if isinstance(g, list) else [g]), run_time=rt)
+
+
 def T(s, size=36, color=WHITE):
     return Tex(s, font_size=size, color=color)
 
@@ -347,13 +363,57 @@ class InterviewScene(VoiceScene):
         self.play(FadeOut(VGroup(tag, q, rule, lines)), run_time=0.6)
 
 
+DEPTH = {**dict.fromkeys("gjpqyQ,;", 0.194), **dict.fromkeys("()[]{}/|", 0.25)}  # Computer Modern, in ems
+
+
+def baseline(m):
+    """The y of a prose line's baseline, or None when it can't be told (maths, several lines, not Tex)."""
+    s = getattr(m, "tex_string", None)
+    if not isinstance(m, Tex) or s is None or any(c in s for c in "$\\"):
+        return None
+    em = m.font_size * EM
+    return m.get_bottom()[1] + em * max([DEPTH.get(c, 0) for c in s] or [0])
+
+
+def align_baselines(*mobs):
+    """Put prose lines on one baseline. Aligning boxes lifts "yes" and drops "hard": y hangs below the line, h doesn't."""
+    ys = [baseline(m) for m in mobs]
+    known = [y for y in ys if y is not None]
+    for m, y in zip(mobs, ys):
+        if y is not None:
+            m.shift(UP * (sum(known) / len(known) - y))
+
+
+def pulse(mob, scale=1.07, color=None, **kw):
+    """'Look here' on a box: it swells and settles, its border in `color`. Not Indicate(color=...) on a filled box: that
+    paints the fill too, and the box is a blank slab over its own text for half a second."""
+    def step(m, t):
+        m.restore()
+        m.scale(1 + (scale - 1) * t)
+        if color:
+            for f in m.get_family():
+                if isinstance(f, VMobject) and len(f.points) and f.get_stroke_width() > 0:
+                    f.set_stroke(interpolate_color(f.get_stroke_color(), ManimColor(color), t), family=False)
+    mob.save_state()
+    return UpdateFromAlphaFunc(mob, lambda m, a: step(m, there_and_back(a)), **kw)
+
+
+def arrive(mob, source, **kw):
+    """A card comes out of something else (a sentence, another card) and lands in its own place. TransformFromCopy is for
+    the same text moving; between different texts it shows half-morphed letters."""
+    return FadeIn(mob, target_position=source, scale=0.6, **kw)
+
+
 def grid(rows, col_align=None, h_buff=0.45, v_buff=0.3):
     """A table of mobjects with aligned columns: rows = [[label, value, ...], ...]. Column widths come from the
     widest cell, so nothing is placed at hand-picked x coordinates. col_align is one of l/c/r per column."""
     cells = [m for row in rows for m in row]
     ncol = len(rows[0])
-    return VGroup(*cells).arrange_in_grid(rows=len(rows), cols=ncol, buff=(h_buff, v_buff),
-                                          col_alignments=col_align or "l" * ncol)
+    g = VGroup(*cells).arrange_in_grid(rows=len(rows), cols=ncol, buff=(h_buff, v_buff),
+                                       col_alignments=col_align or "l" * ncol)
+    for row in rows:
+        align_baselines(*row)
+    return g
 
 
 def card(content, title=None, pad=0.32, gap=0.26, center=ORIGIN, min_width=0):

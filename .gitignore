@@ -9,3 +9,4 @@ agents/tools/node_modules/
 # Rendered by sops-nix from secrets/secrets.yaml (modules/home/secrets.nix).
 agents/opencode/service.json
 agents/opencode/node_modules/
+media/

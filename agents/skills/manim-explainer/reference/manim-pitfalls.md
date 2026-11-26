@@ -23,6 +23,12 @@
   one of its rows would hide it, so `card`/`panel`/`label_box` raise their contents by `z_index` 0.5. Do the same for
   contents you add to a `panel` before showing it.
 - `set_color` on a group recolours the text inside it too: numbers end up in their own cell's colour. Rebuild instead.
+- `Indicate(m, color=…)` paints fills as well: on an opaque card it is a blank slab over its own text. Use
+  `pulse(m)`. The lint looks at rest points, so only the frames show this one.
+- `TransformFromCopy` / `ReplacementTransform` between two *different* texts shows half-morphed letters. Use
+  `arrive(card, source)`, or fade one out and the other in.
+- `self.remove(*[m for m in self.mobjects if m not in keep])` also removes the split-up parts of a character whose eyes
+  were animated. Remove what you created by name.
 - A submobject widens its parent's bounding box: cells holding wider numbers then `arrange` with uneven gaps.
 
 ## Paths and motion

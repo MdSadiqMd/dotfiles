@@ -185,7 +185,9 @@ rendering was a small part. So:
   `label_box(text, w, h, color)`; `box_row(items, y, x=0, buff=0.3)`; `roadmap(steps, current)`. All are opaque
   (`tint(color, amount)` is the fill), so what is behind them never shows through.
 - Layout: `place_label(label, target, avoid, sides=(UP, DOWN, RIGHT, LEFT), buff)`; `connect(a, b, color, arrow=False,
-  cls=None)` (edge to edge, follows moves); `backed(label)` (opaque plate); `allow(shape, label, why)` (lint exception).
+  cls=None)` (edge to edge, follows moves); `backed(label)` (opaque plate); `allow(shape, label, why)` (lint exception); `align_baselines(*lines)` (`grid` does it per row).
+- Emphasis and flow: `paced(self, b, i, *groups)` (spread reveals over segment i; use it for any segment over ~5 s), `pulse(mob, color=None)` (never `Indicate` on a filled box), `arrive(card, source)` (a card coming out
+  of a different text; never morph one sentence into another).
 - Data: `cell_grid(values)`, `vector_cells(values, color, decimals, text_color)` (recolour by rebuilding), `hbars(rows, vmax)` → (group, [(bar, text)]),
   `still(name, height, width)` (ImageMobject), `countdown(scene, seconds)`.
 - Palette: `P_BLUE P_RED P_TEAL P_ORANGE P_PURPLE P_GREEN P_GOLD`, `FOCUS`, `POS`/`NEG`, `DIM`, `SOFT`.
@@ -234,8 +236,9 @@ rendering was a small part. So:
 - **Text:** `Write` only short titles; escape LaTeX specials; `code_col` for code. `code()` is scaled so its size
   matches `T()` at the same number (raw Menlo `Text` is 1.7x bigger); in kit code, never call `Text(font="Menlo")`
   directly. At most two sizes inside one card (title + body).
-- **Gates:** no final render until lint (enforced by `render.py`), beat sheets and ASR QA are clean. Read every
-  chapter's beat sheet: the worst frame of one series was in the one chapter whose sheet nobody opened.
+- **Gates:** no final render until lint (enforced by `render.py`), beat sheets and ASR QA are clean. Lint sees rest points only, so read every
+  chapter's beat sheet (a clean lint still hid a vanished character, solid slabs, half-morphed text and a picture whose count
+  contradicted its label): the worst frame of one series was in the one chapter whose sheet nobody opened.
 - **`lint_skip`** only silences shape-on-shape checks. Nothing about a label can be skipped, only `allow`ed.
 - **Length:** clarity beats brevity (accepted films ran 9–32 min); segment long ones (planning §3).
 

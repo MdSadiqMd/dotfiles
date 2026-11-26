@@ -98,6 +98,21 @@ def main():
             if not ok:
                 failed += 1
                 print(f"FAIL {name}: wanted {want or 'clean'}, got {found or 'clean'}")
+        cells = [T("yes", 28), T("hard", 28), T("(one) user", 28)]
+        grid([cells], col_align="lll")
+        lines = [m[0][k].get_bottom()[1] for m, k in zip(cells, (1, 0, 1))]  # e, h, o all sit on the baseline
+        if max(lines) - min(lines) > 0.012:
+            failed += 1
+            print(f"FAIL grid() rows share a baseline: {lines}")
+        m = label_box("x", color=P_GOLD)
+        a = pulse(m, color=P_RED)
+        a.begin()
+        a.interpolate(0.5)
+        mid = m.box.get_stroke_color()
+        a.interpolate(1)
+        if mid != ManimColor(P_RED) or m.box.get_stroke_color() != ManimColor(P_GOLD):
+            failed += 1
+            print(f"FAIL pulse() returns to the box's own colour: {mid}, {m.box.get_stroke_color()}")
     if failed:
         raise SystemExit(f"{failed} lint cases failed")
     print("lint cases passed")
